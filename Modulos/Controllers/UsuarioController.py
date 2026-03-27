@@ -1,9 +1,83 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QComboBox, 
-    QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox
+    QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox, QDialog, QTextEdit
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from Modulos.Config import Conexion
+
+
+class VentanaEmergenciaRecuperacion(QDialog):
+    def __init__(self, palabras, padre=None):
+        super().__init__(padre)
+        self.setWindowTitle("SISTEMA DE RECUPERACIÓN DE EMERGENCIA")
+        self.setFixedSize(480, 500) # Aumentamos un poco el alto por si acaso
+        self.setModal(True)
+        
+        # --- SOLUCIÓN A LA 'X' ---
+        # Quitamos el botón de cerrar y la ayuda, dejando solo el título
+        self.setWindowFlags(Qt.WindowTitleHint | Qt.CustomizeWindowHint)
+        
+        layout = QVBoxLayout(self)
+
+        # Aviso crítico
+        aviso = QLabel("⚠️ ATENCIÓN: GUARDE ESTAS PALABRAS EN UN LUGAR SEGURO ⚠️")
+        aviso.setStyleSheet("color: #FF4444; font-weight: bold; font-size: 14px;")
+        aviso.setWordWrap(True)
+        layout.addWidget(aviso)
+
+        # --- SOLUCIÓN AL TEXTO CORTADO ---
+        desc = QLabel("Estas 12 palabras son el único método para recuperar su acceso si olvida la contraseña:")
+        desc.setWordWrap(True) # Esto asegura que el texto baje de línea si no cabe
+        layout.addWidget(desc)
+
+        # Área de texto para copiar y pegar
+        self.caja_texto = QTextEdit()
+        self.caja_texto.setReadOnly(True)
+        self.caja_texto.setText("\n".join([f"{i+1}. {p}" for i, p in enumerate(palabras)]))
+        # Estilo para que se vea más profesional
+        self.caja_texto.setStyleSheet("font-family: 'Consolas'; font-size: 12px; background-color: #f0f0f0;")
+        layout.addWidget(self.caja_texto)
+
+        # Botón con cuenta regresiva
+        self.btn_confirmar = QPushButton("Espere 10 segundos...")
+        self.btn_confirmar.setEnabled(False)
+        self.btn_confirmar.clicked.connect(self.accept)
+        layout.addWidget(self.btn_confirmar)
+
+        # Lógica del temporizador
+        self.segundos_restantes = 10
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.actualizar_timer)
+        self.timer.start(1000)
+        self.pass_actual_bd = None # Para comparar en tiempo real
+
+    def actualizar_timer(self):
+        self.segundos_restantes -= 1
+        if self.segundos_restantes > 0:
+            self.btn_confirmar.setText(f"Espere {self.segundos_restantes} segundos...")
+        else:
+            self.timer.stop()
+            self.btn_confirmar.setText("¡Ya guardé mi código!")
+            self.btn_confirmar.setEnabled(True)
+            self.btn_confirmar.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;")
+
+    # --- PROTECCIÓN EXTRA ---
+    # Evita que se cierre con Alt+F4 o cualquier otro método externo
+    def closeEvent(self, event):
+        if self.segundos_restantes > 0:
+            event.ignore()
+        else:
+            super().closeEvent(event)
+
+    def actualizar_timer(self):
+        self.segundos_restantes -= 1
+        if self.segundos_restantes > 0:
+            self.btn_confirmar.setText(f"Espere {self.segundos_restantes} segundos...")
+        else:
+            self.timer.stop()
+            self.btn_confirmar.setText("¡Ya guardé mi código!")
+            self.btn_confirmar.setEnabled(True)
+            self.btn_confirmar.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;")
 
 class ControladorUsuario:
     def __init__(self):
@@ -24,7 +98,39 @@ class ControladorUsuario:
         self.btn_modo_editar = None
         self.entrada_busqueda = None
         self.etiqueta_pass = None
-        self.etiqueta_estado = None 
+        self.etiqueta_estado = None
+        self.pass_actual_bd = ""
+
+    def proceso_recuperacion_emergencia(self):
+        from Modulos.PasswordRecover import ValidadorRecuperacion
+        
+        dialogo = ValidadorRecuperacion(self.widget_formulario)
+        if dialogo.exec():
+            # Si las 12 palabras son correctas:
+            QMessageBox.information(None, "Éxito", "Identidad confirmada. Ahora puede establecer una nueva contraseña.")
+            
+            # Forzamos que la pass_actual_bd sea reconocida como 'válida' 
+            # o simplemente habilitamos el botón de guardar directamente
+            self.btn_guardar.setEnabled(True)
+            self.entrada_pass_nueva.setFocus()
+            # Opcional: podrías limpiar el campo de pass_actual para que no estorbe
+            self.entrada_pass_actual.setText("RECUPERADO_POR_PALABRAS") 
+            self.entrada_pass_actual.setEnabled(False)
+
+    def verificar_pass_tiempo_real(self, texto_ingresado):
+        # 1. Obtenemos el valor de forma segura. Si no existe, será ""
+        pass_bd = getattr(self, 'pass_actual_bd', "")
+        
+        if self.modo == 'editar' and self.combo_tipo_cuenta.currentText() == "Bibliotecario":
+            # 2. USAMOS pass_bd (la variable local segura) en lugar de self.pass_actual_bd
+            if texto_ingresado == pass_bd: 
+                self.btn_guardar.setEnabled(True)
+                self.btn_guardar.setStyleSheet("background-color: #4CAF50; color: white;")
+                self.entrada_pass_actual.setStyleSheet("border: 2px solid green;")
+            else:
+                self.btn_guardar.setEnabled(False)
+                self.btn_guardar.setStyleSheet("background-color: #cccccc;")
+                self.entrada_pass_actual.setStyleSheet("border: 2px solid red;")
 
     def obtener_todos(self):
         cursor = self.bd.cursor(dictionary=True)
@@ -56,28 +162,68 @@ class ControladorUsuario:
         return resultado
 
     def guardar_bd(self, nombre, email, id_tipo, estado, contrasena, es_actualizacion):
-        cursor = self.bd.cursor()
-        try:
-            if es_actualizacion:
-                consulta = "UPDATE usuarios SET nombre=%s, id_tipo_usuario=%s, estado_cuenta=%s"
-                params = [nombre, id_tipo, estado]
-                if contrasena is not None:
-                    consulta += ", contraseña=%s"
-                    params.append(contrasena)
-                consulta += " WHERE email=%s"
-                params.append(email)
-                cursor.execute(consulta, tuple(params))
-            else:
-                cursor.execute("""
-                    INSERT INTO usuarios (nombre, email, id_tipo_usuario, estado_cuenta, contraseña) 
-                    VALUES (%s, %s, %s, %s, %s)
-                """, (nombre, email, id_tipo, estado, contrasena or ''))
-            self.bd.commit()
-        except Exception as e:
-            self.bd.rollback()
-            raise e
-        finally:
-            cursor.close()
+            import random
+            cursor = self.bd.cursor()
+            try:
+                # 1. Obtenemos el nombre del tipo AL PRINCIPIO para que esté disponible en ambos casos
+                cursor.execute("SELECT nombre FROM param_tipos_usuario WHERE id_tipo_usuario = %s", (id_tipo,))
+                res_tipo = cursor.fetchone()
+                nombre_tipo = res_tipo[0] if res_tipo else ""
+
+                if es_actualizacion:
+                    # Obtenemos el ID del usuario existente mediante su email
+                    cursor.execute("SELECT id_usuario FROM usuarios WHERE email = %s", (email,))
+                    res_id = cursor.fetchone()
+                    target_id_usuario = res_id[0] if res_id else None
+
+                    consulta = "UPDATE usuarios SET nombre=%s, id_tipo_usuario=%s, estado_cuenta=%s"
+                    params = [nombre, id_tipo, estado]
+                    if contrasena is not None:
+                        consulta += ", contraseña=%s"
+                        params.append(contrasena)
+                    consulta += " WHERE email=%s"
+                    params.append(email)
+                    cursor.execute(consulta, tuple(params))
+                else:
+                    # Creación normal
+                    cursor.execute("""
+                        INSERT INTO usuarios (nombre, email, id_tipo_usuario, estado_cuenta, contraseña) 
+                        VALUES (%s, %s, %s, %s, %s)
+                    """, (nombre, email, id_tipo, estado, contrasena or ''))
+                    target_id_usuario = cursor.lastrowid
+
+                # 2. Ahora nombre_tipo y target_id_usuario SIEMPRE existen
+                if nombre_tipo == "Bibliotecario":
+                    indices_num = [random.randint(1, 999) for _ in range(12)]
+                    indices_txt = ", ".join(map(str, indices_num))
+                    
+                    palabras_recuperacion = []
+                    for idx in indices_num:
+                        cursor.execute("SELECT palabra FROM param_diccionario_seguridad WHERE id_palabra = %s", (idx,))
+                        res = cursor.fetchone()
+                        if res:
+                            palabras_recuperacion.append(res[0])
+                        else:
+                            palabras_recuperacion.append(f"Error-ID-{idx}")
+
+                    # Si es edición, podrías querer borrar las palabras viejas antes de insertar nuevas
+                    if es_actualizacion:
+                        cursor.execute("DELETE FROM seguridad_recuperacion WHERE id_usuario = %s", (target_id_usuario,))
+
+                    cursor.execute("""
+                        INSERT INTO seguridad_recuperacion (id_usuario, indices_palabras)
+                        VALUES (%s, %s)
+                    """, (target_id_usuario, indices_txt))
+
+                    ventana = VentanaEmergenciaRecuperacion(palabras_recuperacion)
+                    ventana.exec()
+
+                self.bd.commit()
+            except Exception as e:
+                self.bd.rollback()
+                raise e
+            finally:
+                cursor.close()
 
     def eliminar_logico(self, email):
         cursor = self.bd.cursor()
@@ -133,19 +279,17 @@ class ControladorUsuario:
         self.establecer_modo_crear(inicial=True)
 
     def obtener_widget_formulario(self, ctrl_param):
-        self.ctrl_param = ctrl_param
-        if self.widget_formulario:
-            return self.widget_formulario
-        
         self.widget_formulario = QWidget()
         layout_principal = QVBoxLayout(self.widget_formulario)
         
+        # --- SECCIÓN DE MODOS (Crear/Editar) ---
         layout_principal.addWidget(QLabel("Acciones"))
         layout_modo = QHBoxLayout()
         self.btn_modo_crear = QPushButton("Crear Nuevo")
         self.btn_modo_crear.setCheckable(True)
         self.btn_modo_crear.setChecked(True)
         self.btn_modo_crear.clicked.connect(self.establecer_modo_crear)
+        
         self.btn_modo_editar = QPushButton("Editar Existente")
         self.btn_modo_editar.setCheckable(True)
         self.btn_modo_editar.clicked.connect(self.establecer_modo_editar)
@@ -154,49 +298,81 @@ class ControladorUsuario:
         layout_modo.addWidget(self.btn_modo_editar)
         layout_principal.addLayout(layout_modo)
 
+        # --- CONTENEDOR DEL FORMULARIO ---
         self.widget_contenido_formulario = QWidget()
         layout_contenido = QVBoxLayout(self.widget_contenido_formulario)
 
+        # Email
         layout_contenido.addWidget(QLabel("Email (Identificador Único)"))
         self.entrada_email = QLineEdit()
         self.entrada_email.setPlaceholderText("ejemplo@email.com")
         self.entrada_email.editingFinished.connect(self.al_terminar_edicion_email)
         layout_contenido.addWidget(self.entrada_email)
 
+        # Nombre
         layout_contenido.addWidget(QLabel("Nombre Completo"))
         self.entrada_nombre = QLineEdit()
         layout_contenido.addWidget(self.entrada_nombre)
         
+        # Tipo de Cuenta
         layout_contenido.addWidget(QLabel("Tipo de Cuenta"))
         self.combo_tipo_cuenta = QComboBox()
-        self.cargar_combos()
         layout_contenido.addWidget(self.combo_tipo_cuenta)
+
+        # --- SECCIÓN DE CONTRASEÑA (DEFINICIÓN ÚNICA) ---
+        self.etiqueta_pass_actual = QLabel("Contraseña Actual (Requerida para Bibliotecarios)")
+        self.entrada_pass_actual = QLineEdit()
+        self.entrada_pass_actual.setEchoMode(QLineEdit.Password)
+        self.entrada_pass_actual.setPlaceholderText("Escriba su contraseña actual...")
+        self.entrada_pass_actual.textChanged.connect(self.verificar_pass_tiempo_real)
+
+        # ... debajo de self.entrada_pass_actual ...
+        self.btn_recuperar_pass = QPushButton("¿Olvidó su contraseña?")
+        self.btn_recuperar_pass.setStyleSheet("color: #3498db; border: none; background: transparent; text-decoration: underline;")
+        self.btn_recuperar_pass.setCursor(Qt.PointingHandCursor)
+        self.btn_recuperar_pass.clicked.connect(self.proceso_recuperacion_emergencia)
         
-        self.etiqueta_pass = QLabel("Contraseña")
-        self.entrada_contrasena = QLineEdit()
-        self.entrada_contrasena.setEchoMode(QLineEdit.Password)
-        self.etiqueta_pass.hide() 
-        self.entrada_contrasena.hide() 
-        layout_contenido.addWidget(self.etiqueta_pass)
-        layout_contenido.addWidget(self.entrada_contrasena)
+        # Ocultar por defecto, solo se ve en edición y si es Bibliotecario
+        self.btn_recuperar_pass.hide() 
         
+        layout_contenido.addWidget(self.btn_recuperar_pass)
+        
+        self.etiqueta_pass_nueva = QLabel("Nueva Contraseña (Opcional)")
+        self.entrada_pass_nueva = QLineEdit()
+        self.entrada_pass_nueva.setEchoMode(QLineEdit.Password)
+        self.entrada_pass_nueva.setPlaceholderText("Dejar vacío para no cambiar")
+        
+        # Añadimos al layout
+        layout_contenido.addWidget(self.etiqueta_pass_actual)
+        layout_contenido.addWidget(self.entrada_pass_actual)
+        layout_contenido.addWidget(self.etiqueta_pass_nueva)
+        layout_contenido.addWidget(self.entrada_pass_nueva)
+
+        # --- ESTADO Y GUARDADO ---
         self.etiqueta_estado = QLabel("Estado")
-        self.etiqueta_estado.hide() 
-        layout_contenido.addWidget(self.etiqueta_estado)
-        
         self.combo_estado_cuenta = QComboBox()
         self.combo_estado_cuenta.addItems(["ACTIVA", "SUSPENDIDA", "ELIMINADA"])
-        self.combo_estado_cuenta.hide()
+        
+        layout_contenido.addWidget(self.etiqueta_estado)
         layout_contenido.addWidget(self.combo_estado_cuenta)
+        
         layout_contenido.addStretch()
+        
         self.btn_guardar = QPushButton("Guardar Cambios")
         self.btn_guardar.setObjectName("ActionButton")
         self.btn_guardar.clicked.connect(self.manejar_guardado)
         layout_contenido.addWidget(self.btn_guardar)
+
+        # --- CONEXIÓN DE SEÑALES Y CARGA FINAL ---
         self.combo_tipo_cuenta.currentTextChanged.connect(self.alternar_contrasena)
+        
+        # Ahora que todo existe, cargamos los datos
+        self.cargar_combos() 
+        
         layout_principal.addWidget(self.widget_contenido_formulario)
         layout_principal.addStretch()
         
+        # Estado inicial
         self.widget_contenido_formulario.hide() 
         self.establecer_modo_crear(inicial=True) 
 
@@ -256,17 +432,24 @@ class ControladorUsuario:
     def limpiar_formulario(self):
         self.entrada_nombre.clear()
         self.entrada_email.clear()
-        self.entrada_contrasena.clear()
+        self.entrada_pass_actual.clear() # Asegúrate de usar los nuevos nombres aquí también
+        self.entrada_pass_nueva.clear()
         if self.combo_tipo_cuenta.count() > 0:
             self.combo_tipo_cuenta.setCurrentIndex(0)
         self.combo_estado_cuenta.setCurrentIndex(0)
 
     def alternar_contrasena(self, texto):
         visible = (texto == "Bibliotecario")
-        if self.etiqueta_pass:
-             self.etiqueta_pass.setVisible(visible)
-        if self.entrada_contrasena:
-             self.entrada_contrasena.setVisible(visible)
+        es_edicion = (self.modo == 'editar')
+        
+        self.etiqueta_pass_actual.setVisible(visible)
+        self.entrada_pass_actual.setVisible(visible)
+        
+        # El botón de recuperar solo aparece en edición de Bibliotecario
+        self.btn_recuperar_pass.setVisible(visible and es_edicion)
+        
+        self.etiqueta_pass_nueva.setVisible(visible and es_edicion)
+        self.entrada_pass_nueva.setVisible(visible and es_edicion)
 
     def cargar_datos(self):
         datos = self.obtener_todos() 
@@ -305,8 +488,14 @@ class ControladorUsuario:
         
         if usuario:
             self.entrada_nombre.setText(usuario['nombre'])
+            self.pass_actual_bd = usuario['contraseña'] # <--- GUARDAMOS LA PASS DE LA BD
             indice = self.combo_tipo_cuenta.findData(usuario['id_tipo_usuario'])
             if indice >= 0: self.combo_tipo_cuenta.setCurrentIndex(indice)
+            
+            # Si es Bibliotecario, bloqueamos el botón hasta que valide
+            if self.combo_tipo_cuenta.currentText() == "Bibliotecario":
+                self.btn_guardar.setEnabled(False)
+                self.btn_guardar.setStyleSheet("background-color: #cccccc;")
             
             if usuario['estado_cuenta'] == 'INACTIVA':
                 self.combo_estado_cuenta.setCurrentText('SUSPENDIDA')
@@ -327,53 +516,43 @@ class ControladorUsuario:
         email = self.entrada_email.text().strip()
         id_tipo = self.combo_tipo_cuenta.currentData()
         tipo_str = self.combo_tipo_cuenta.currentText()
-        pwd = self.entrada_contrasena.text()
+        
+        # Lógica de contraseña: Si hay algo en 'nueva', usamos eso. Si no, mantenemos la que ya estaba en la BD.
+        nueva_pwd = self.entrada_pass_nueva.text().strip()
+        pass_final = nueva_pwd if nueva_pwd else self.pass_actual_bd
 
         if not nombre or not email:
             QMessageBox.warning(None, "Error", "Nombre y Email son obligatorios")
             return
         
-        existe = self.obtener_por_email(email)
-
-        if self.modo == 'crear':
-            if existe:
-                QMessageBox.warning(None, "Error", "Ya existe un usuario con este Email.")
-                return
-            
-            if tipo_str == "Bibliotecario" and not pwd.strip():
-                QMessageBox.warning(None, "Error", "El Bibliotecario necesita una Contraseña.")
-                return
-
-            try:
-                self.guardar_bd(nombre, email, id_tipo, "ACTIVA", pwd.strip(), False)
+        try:
+            if self.modo == 'crear':
+                # Validamos que no exista antes de intentar crear
+                if self.obtener_por_email(email):
+                    QMessageBox.warning(None, "Error", "Ya existe un usuario con este Email.")
+                    return
+                
+                pwd_crear = self.entrada_pass_actual.text().strip()
+                if tipo_str == "Bibliotecario" and not pwd_crear:
+                    QMessageBox.warning(None, "Error", "El Bibliotecario requiere contraseña.")
+                    return
+                    
+                self.guardar_bd(nombre, email, id_tipo, "ACTIVA", pwd_crear, False)
                 QMessageBox.information(None, "Éxito", "Usuario creado.")
-            except Exception as e:
-                QMessageBox.critical(None, "Error de DB", str(e))
-        
-        else: 
-            if not existe:
-                QMessageBox.warning(None, "Error", "Usuario no encontrado para editar.")
-                return
             
-            estado_ui = self.combo_estado_cuenta.currentText()
-            
-            if tipo_str != "Bibliotecario":
-                pwd = None
-            elif not pwd.strip():
-                pwd = None 
-            
-            try:
+            else: # MODO EDICIÓN
+                estado_ui = self.combo_estado_cuenta.currentText()
                 if estado_ui == "SUSPENDIDA":
                     self.eliminar_logico(email)
-                    QMessageBox.information(None, "Info", "Usuario suspendido (INACTIVA).")
                 elif estado_ui == "ELIMINADA":
                     self.eliminar_fisico(email)
-                    QMessageBox.information(None, "Info", "Usuario eliminado permanentemente.")
                 else:
-                    self.guardar_bd(nombre, email, id_tipo, "ACTIVA", pwd, True) 
-                    QMessageBox.information(None, "Éxito", "Usuario actualizado.")
-                    
-            except Exception as e:
-                QMessageBox.critical(None, "Error de DB", str(e))
-        self.cargar_datos()
-        self.limpiar_formulario()
+                    # Guardamos con pass_final (la nueva si escribió algo, o la actual si no)
+                    self.guardar_bd(nombre, email, id_tipo, "ACTIVA", pass_final, True)
+                QMessageBox.information(None, "Éxito", "Cambios aplicados correctamente.")
+            
+            self.cargar_datos()
+            self.limpiar_formulario()
+            
+        except Exception as e:
+            QMessageBox.critical(None, "Error de Base de Datos", str(e))

