@@ -36,7 +36,7 @@ class ControladorInsumo(QObject):
         existe = cursor.fetchone() is not None
         cursor.close()
         return existe
-
+    # Puedes usar la libreria security de python para generar el hash unico
     def generar_runa_unica(self):
         caracteres = string.ascii_uppercase
         longitud = 5
@@ -93,7 +93,7 @@ class ControladorInsumo(QObject):
             raise e
         finally:
             cursor.close()
-
+    # evita el eliminado fisico
     def eliminar_fisico(self, clave_runa):
         cursor = self.bd.cursor()
         try:
@@ -107,7 +107,7 @@ class ControladorInsumo(QObject):
     
     def es_libro(self, id_tipo):
         return id_tipo == 3
-
+    
     def cargar_datos(self, *args):
         datos = self.obtener_todos()
         self.tabla.setRowCount(0)
@@ -140,7 +140,7 @@ class ControladorInsumo(QObject):
         
         self.cargar_datos()
         return self.widget_vista
-
+    
     def reiniciar_visibilidad_formulario(self):
         if self.widget_contenido_formulario:
             self.widget_contenido_formulario.hide() 
@@ -271,7 +271,7 @@ class ControladorInsumo(QObject):
                     coincidencia = True
                     break
             self.tabla.setRowHidden(i, not coincidencia)
-
+    # evita usar palabras como intentar o proabr
     def intentar_cargar_edicion(self):
         if self.modo != 'editar': return
         clave_runa = self.entrada_runa.text().strip()
