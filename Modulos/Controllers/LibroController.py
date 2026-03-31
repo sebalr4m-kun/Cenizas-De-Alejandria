@@ -53,7 +53,7 @@ class ControladorLibro(QObject):
         runa_reserva = str(int(time.time() * 1000000))[-longitud:]
         if not self.verificar_existencia_runa(runa_reserva): return runa_reserva
         raise Exception("Error generando RUNA.")
-
+    # evita nombres genericos como "todos"
     def obtener_todos(self):
         cursor = self.bd.cursor(dictionary=True)
         consulta = """
