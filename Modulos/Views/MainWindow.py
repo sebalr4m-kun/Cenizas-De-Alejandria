@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QStackedWidget, QMessageBox,
     QFileDialog 
 )
-from PySide6.QtCore import Qt, Signal, QObject 
+from PySide6.QtCore import Qt, Signal
 
 from Modulos.Controllers.UsuarioController import ControladorUsuario
 from Modulos.Controllers.InsumoController import ControladorInsumo
@@ -14,9 +14,9 @@ from Modulos.Controllers.LibroController import ControladorLibro
 from Modulos.Controllers.PrestamoController import ControladorPrestamo
 from Modulos.Controllers.ParametroController import ControladorParametro
 
-class VentanaPrincipal(QMainWindow):
-    datos_insumo_necesitan_recarga = Signal() 
+from Modulos.Views.UsuarioViews import VentanaEmergenciaRecuperacion
 
+class VentanaPrincipal(QMainWindow):
     def __init__(self, rol='invitado'):
         super().__init__()
         self.rol = rol
@@ -29,6 +29,12 @@ class VentanaPrincipal(QMainWindow):
         self.ctrl_libro = ControladorLibro() 
         self.ctrl_prestamo = ControladorPrestamo()
         
+        if hasattr(self.ctrl_usuario, 'datos_actualizados'):
+            self.ctrl_usuario.datos_actualizados.connect(lambda: self.cambiar_pagina(0))
+        
+        self.ctrl_libro.libro_guardado.connect(self.ctrl_insumo.cargar_datos)
+        self.ctrl_insumo.datos_actualizados.connect(self.ctrl_libro.cargar_datos)
+
         widget_principal = QWidget()
         layout_principal = QHBoxLayout(widget_principal)
         self.setCentralWidget(widget_principal)
@@ -37,15 +43,13 @@ class VentanaPrincipal(QMainWindow):
         layout_menu.setSpacing(10)
         self.btn_usuarios = QPushButton("Usuarios")
         self.btn_items = QPushButton("Insumos")
-        self.btn_libros = QPushButton(f"Libros (Clase)")
+        self.btn_libros = QPushButton("Libros (Clase)")
         self.btn_prestamos = QPushButton("Préstamos")
         self.btn_params = QPushButton("Parámetros")
         self.btn_exportar = QPushButton("Exportar Excel")
         self.btn_exportar.setObjectName("SecondaryButton")
         
-        self.botones_menu = [
-            self.btn_usuarios, self.btn_items, self.btn_libros, self.btn_prestamos, self.btn_params
-        ]
+        self.botones_menu = [self.btn_usuarios, self.btn_items, self.btn_libros, self.btn_prestamos, self.btn_params]
 
         for btn in self.botones_menu:
             btn.setMinimumHeight(45)
@@ -69,7 +73,7 @@ class VentanaPrincipal(QMainWindow):
         self.pila_derecha = QStackedWidget()
         self.pila_derecha.addWidget(self.ctrl_usuario.obtener_widget_formulario(self.ctrl_param))
         self.pila_derecha.addWidget(self.ctrl_insumo.obtener_widget_formulario(self.ctrl_param))
-        self.pila_derecha.addWidget(self.ctrl_libro.obtener_widget_formulario(self.ctrl_param)) 
+        self.pila_derecha.addWidget(self.ctrl_libro.obtener_widget_formulario(self.ctrl_param))
         self.pila_derecha.addWidget(self.ctrl_prestamo.obtener_widget_formulario(self.ctrl_param))
         self.pila_derecha.addWidget(self.ctrl_param.obtener_widget_formulario())
         
@@ -83,16 +87,30 @@ class VentanaPrincipal(QMainWindow):
         self.btn_params.clicked.connect(lambda: self.cambiar_pagina(4))
         self.btn_exportar.clicked.connect(self.exportar_datos)
 
-        self.ctrl_libro.libro_guardado.connect(self.ctrl_insumo.cargar_datos)
-        
-        self.ctrl_insumo.datos_actualizados.connect(self.ctrl_libro.cargar_datos)
+        # === CONEXIÓN ESPECIAL PARA USUARIOS ===
+        self._conectar_guardado_usuarios()
 
-        if rol != 'admin':
+        roles_autorizados = ['Bibliotecario', 'admin', 'Director']
+        if self.rol not in roles_autorizados:
             self.pila_derecha.hide()
             self.btn_params.hide()
-
+            
         self.cambiar_pagina(0) 
 
+    def _conectar_guardado_usuarios(self):
+        try:
+            self.ctrl_usuario.vista.btn_guardar.clicked.disconnect()
+        except:
+            pass
+        self.ctrl_usuario.vista.btn_guardar.clicked.connect(self._handle_guardado_usuario)
+
+    def _handle_guardado_usuario(self):
+        """Solo llama al controlador. La ventana de 12 palabras se muestra SOLO desde el Controller."""
+        self.ctrl_usuario.manejar_guardado()
+        # ←←← YA NO CREAMOS NINGUNA VENTANA AQUÍ
+        # La ventana limpia (con parent=None) se muestra desde el Controller
+
+    # === EL RESTO ES IGUAL AL QUE YA TENÍAS ===
     def actualizar_resaltado_menu(self, indice):
         if not (0 <= indice < len(self.botones_menu)): return
         for i, btn in enumerate(self.botones_menu):
@@ -102,37 +120,32 @@ class VentanaPrincipal(QMainWindow):
 
     def cambiar_pagina(self, indice):
         self.actualizar_resaltado_menu(indice)
-        
         self.pila_central.setCurrentIndex(indice)
         self.pila_derecha.setCurrentIndex(indice)
         
         controlador = self.obtener_controlador_por_indice(indice)
         if controlador:
             if hasattr(controlador, 'cargar_datos'):
-                controlador.cargar_datos() 
-            
+                controlador.cargar_datos()
             if hasattr(controlador, 'reiniciar_visibilidad_formulario'):
                 controlador.reiniciar_visibilidad_formulario()
-
             widget_actual = self.pila_central.currentWidget()
             if widget_actual:
-                widget_actual.repaint() 
-                widget_actual.adjustSize() 
+                widget_actual.update()
+                widget_actual.repaint()
+                widget_actual.adjustSize()
 
     def obtener_controlador_por_indice(self, indice):
-        controladores = [
-            self.ctrl_usuario, self.ctrl_insumo, self.ctrl_libro, 
-            self.ctrl_prestamo, self.ctrl_param
-        ]
+        controladores = [self.ctrl_usuario, self.ctrl_insumo, self.ctrl_libro, self.ctrl_prestamo, self.ctrl_param]
         return controladores[indice] if 0 <= indice < len(controladores) else None
-        
-    def exportar_datos(self):
-        if self.rol != 'admin':
-            QMessageBox.warning(self, "Acceso Denegado", "Solo los administradores pueden exportar.")
-            return
 
+    def exportar_datos(self):
+        if self.rol != 'Bibliotecario':
+            QMessageBox.warning(self, "Acceso Denegado", "Solo los bibliotecarios pueden exportar.")
+            return
+        
         datos_para_exportar = {
-            "Usuarios": self.ctrl_usuario.obtener_todos(),
+            "Usuarios": self.ctrl_usuario.model.obtener_todos(),
             "Insumos": self.ctrl_insumo.obtener_todos(),
             "Libros": self.ctrl_libro.obtener_todos(),
             "Préstamos": self.ctrl_prestamo.obtener_todos(),

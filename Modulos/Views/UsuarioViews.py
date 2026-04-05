@@ -1,6 +1,6 @@
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QComboBox, 
-    QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox, 
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QComboBox,
+    QPushButton, QTableWidget, QTableWidgetItem, QHeaderView,
     QDialog, QTextEdit
 )
 from PySide6.QtCore import Qt, QTimer
@@ -11,10 +11,8 @@ class VentanaEmergenciaRecuperacion(QDialog):
         self.setWindowTitle("SISTEMA DE RECUPERACIÓN DE EMERGENCIA")
         self.setFixedSize(480, 500)
         self.setModal(True)
-        
-        # Quitar botón de cerrar y ayuda
         self.setWindowFlags(Qt.WindowTitleHint | Qt.CustomizeWindowHint)
-        
+
         layout = QVBoxLayout(self)
 
         aviso = QLabel("⚠️ ATENCIÓN: GUARDE ESTAS PALABRAS EN UN LUGAR SEGURO ⚠️")
@@ -58,60 +56,53 @@ class VentanaEmergenciaRecuperacion(QDialog):
         else:
             super().closeEvent(event)
 
+
 class VistaUsuario(QWidget):
-    """Clase que construye los elementos visuales del módulo de usuarios"""
     def __init__(self):
         super().__init__()
-        # Definición de Widgets para que el Controlador pueda acceder a ellos
         self.tabla = QTableWidget()
         self.entrada_busqueda = QLineEdit()
-        
-        # Formulario
         self.btn_modo_crear = QPushButton("Crear Nuevo")
         self.btn_modo_editar = QPushButton("Editar Existente")
         self.widget_contenido_formulario = QWidget()
-        
+
         self.entrada_email = QLineEdit()
         self.entrada_nombre = QLineEdit()
         self.combo_tipo_cuenta = QComboBox()
-        
-        self.etiqueta_pass_actual = QLabel("Contraseña Actual (Requerida para Bibliotecarios)")
+        self.etiqueta_pass_actual = QLabel("Contraseña Actual")
         self.entrada_pass_actual = QLineEdit()
         self.btn_recuperar_pass = QPushButton("¿Olvidó su contraseña?")
-        
-        self.etiqueta_pass_nueva = QLabel("Nueva Contraseña (Opcional)")
+        self.etiqueta_pass_nueva = QLabel("Nueva Contraseña")
         self.entrada_pass_nueva = QLineEdit()
-        
         self.etiqueta_estado = QLabel("Estado")
         self.combo_estado_cuenta = QComboBox()
         self.btn_guardar = QPushButton("Guardar Cambios")
 
+        # Configuración inicial de widgets
+        self.entrada_pass_actual.setEchoMode(QLineEdit.Password)
+        self.entrada_pass_nueva.setEchoMode(QLineEdit.Password)
+        self.combo_estado_cuenta.addItems(["ACTIVA", "SUSPENDIDA", "ELIMINADA"])
+
     def construir_vista_listado(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        
-        titulo = QLabel("Gestión de Usuarios")
-        titulo.setProperty("isTitle", True)
-        layout.addWidget(titulo)
-        
-        layout_busqueda = QHBoxLayout()
-        self.entrada_busqueda.setPlaceholderText("Filtrar...")
-        self.entrada_busqueda.setObjectName("SearchInput")
-        layout_busqueda.addWidget(self.entrada_busqueda)
-        layout.addLayout(layout_busqueda)
-        
+        layout.addWidget(QLabel("Gestión de Usuarios"))
+        self.entrada_busqueda.setPlaceholderText("Filtrar por nombre o email...")
+        layout.addWidget(self.entrada_busqueda)
+
         self.tabla.setColumnCount(4)
         self.tabla.setHorizontalHeaderLabels(["Nombre", "Email", "Tipo Cuenta", "Estado"])
         self.tabla.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.tabla.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.tabla.setSelectionBehavior(QTableWidget.SelectRows)
         layout.addWidget(self.tabla)
-        
         return widget
 
     def construir_vista_formulario(self):
         widget_principal = QWidget()
         layout_principal = QVBoxLayout(widget_principal)
-        
-        layout_principal.addWidget(QLabel("Acciones"))
+
+        # Selector de modo
         layout_modo = QHBoxLayout()
         self.btn_modo_crear.setCheckable(True)
         self.btn_modo_editar.setCheckable(True)
@@ -119,43 +110,32 @@ class VistaUsuario(QWidget):
         layout_modo.addWidget(self.btn_modo_editar)
         layout_principal.addLayout(layout_modo)
 
+        # Contenido del formulario
         layout_contenido = QVBoxLayout(self.widget_contenido_formulario)
+        layout_contenido.setContentsMargins(5, 5, 5, 5)
 
-        layout_contenido.addWidget(QLabel("Email (Identificador Único)"))
-        self.entrada_email.setPlaceholderText("ejemplo@email.com")
+        layout_contenido.addWidget(QLabel("Email"))
         layout_contenido.addWidget(self.entrada_email)
-
         layout_contenido.addWidget(QLabel("Nombre Completo"))
         layout_contenido.addWidget(self.entrada_nombre)
-        
         layout_contenido.addWidget(QLabel("Tipo de Cuenta"))
         layout_contenido.addWidget(self.combo_tipo_cuenta)
 
-        # Contraseña
-        self.entrada_pass_actual.setEchoMode(QLineEdit.Password)
-        self.btn_recuperar_pass.setStyleSheet("color: #3498db; border: none; background: transparent; text-decoration: underline;")
-        self.btn_recuperar_pass.setCursor(Qt.PointingHandCursor)
-        
-        self.entrada_pass_nueva.setEchoMode(QLineEdit.Password)
-        self.entrada_pass_nueva.setPlaceholderText("Dejar vacío para no cambiar")
-        
         layout_contenido.addWidget(self.etiqueta_pass_actual)
         layout_contenido.addWidget(self.entrada_pass_actual)
         layout_contenido.addWidget(self.btn_recuperar_pass)
         layout_contenido.addWidget(self.etiqueta_pass_nueva)
         layout_contenido.addWidget(self.entrada_pass_nueva)
 
-        # Estado
-        self.combo_estado_cuenta.addItems(["ACTIVA", "SUSPENDIDA", "ELIMINADA"])
         layout_contenido.addWidget(self.etiqueta_estado)
         layout_contenido.addWidget(self.combo_estado_cuenta)
-        
+
         layout_contenido.addStretch()
-        
+
         self.btn_guardar.setObjectName("ActionButton")
+        self.btn_guardar.setMinimumHeight(40)
         layout_contenido.addWidget(self.btn_guardar)
 
         layout_principal.addWidget(self.widget_contenido_formulario)
         layout_principal.addStretch()
-        
         return widget_principal
