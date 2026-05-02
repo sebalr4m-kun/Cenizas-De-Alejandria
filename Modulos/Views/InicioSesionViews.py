@@ -4,7 +4,7 @@ from PySide6.QtCore import Qt
 class VistaLogin(QDialog):
     def __init__(self, padre=None):
         super().__init__(padre)
-        self.setWindowTitle("Acceso al Sistema - MATEO11-15")
+        self.setWindowTitle("Acceso al Sistema - Cenizas De Alejandría")
         self.setModal(True)
         self.setFixedWidth(350)
         

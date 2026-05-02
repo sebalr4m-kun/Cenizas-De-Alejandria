@@ -8,14 +8,12 @@ from PySide6.QtCore import Qt
 class VistaLibro:
     def __init__(self, controlador):
         self.ctrl = controlador
-        
-        # Referencias de UI
         self.widget_vista = None
         self.widget_formulario = None
         self.widget_contenido_formulario = None
         self.tabla = None
-        
-        # Campos de entrada
+
+        # Referencias de UI
         self.entrada_isbn = None
         self.entrada_titulo = None
         self.entrada_stock = None
@@ -25,11 +23,12 @@ class VistaLibro:
         self.combo_genero = None
         self.combo_estado = None
         self.etiqueta_estado = None
-        self.entrada_busqueda = None
         
-        # Botones de modo
         self.btn_crear = None
         self.btn_editar = None
+        
+        # Referencia al controlador de parámetros para refrescos rápidos
+        self.ultima_ref_param = None
 
     def construir_vista_catalogo(self):
         self.widget_vista = QWidget()
@@ -39,30 +38,69 @@ class VistaLibro:
         titulo.setProperty("isTitle", True) 
         layout.addWidget(titulo) 
         
-        self.entrada_busqueda = QLineEdit(placeholderText="Filtrar por Título o ISBN...")
+        self.entrada_busqueda = QLineEdit()
+        self.entrada_busqueda.setPlaceholderText("🔍 Filtrar por Título o ISBN...")
         self.entrada_busqueda.textChanged.connect(self.filtrar_tabla)
         layout.addWidget(self.entrada_busqueda)
         
         self.tabla = QTableWidget()
         self.tabla.setColumnCount(5)
-        self.tabla.setHorizontalHeaderLabels(["Título", "ISBN", "Autor", "Stock", "Disponible"])
+        self.tabla.setHorizontalHeaderLabels(["Título", "ISBN", "Autor", "Disponible", "Stock Total"])
         self.tabla.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        layout.addWidget(self.tabla)
         
-        # Guardamos la referencia de la tabla en el controlador para que pueda refrescarla
+        # --- CONFIGURACIÓN DE TABLA ---
+        self.tabla.setSelectionBehavior(QTableWidget.SelectRows)
+        self.tabla.setSelectionMode(QTableWidget.SingleSelection)
+        self.tabla.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.tabla.setAlternatingRowColors(True)
+        self.tabla.setShowGrid(False)
+        
+        self.tabla.clicked.connect(self.solicitar_edicion_desde_tabla)
+        self.tabla.itemDoubleClicked.connect(self.solicitar_edicion_desde_tabla)
+        
+        layout.addWidget(self.tabla)
         self.ctrl.tabla = self.tabla
-        self.cargar_datos_tabla()
         return self.widget_vista
 
+    def actualizar_tabla(self, datos=None):
+        """
+        ACTUALIZACIÓN AGRESIVA: Si no se pasan datos, la vista los solicita 
+        directamente al controlador para asegurar sincronía con la matriz.
+        """
+        if not self.tabla: return
+        
+        # Si no nos pasan datos (llamada desde el Refresco Agresivo), los buscamos
+        if datos is None:
+            if hasattr(self.ctrl, 'model') and hasattr(self.ctrl.model, 'obtener_todos'):
+                datos = self.ctrl.model.obtener_todos()
+            else:
+                # Intento de respaldo si la estructura varía
+                datos = []
+
+        self.tabla.setRowCount(0)
+        for i, d in enumerate(datos):
+            self.tabla.insertRow(i)
+            self.tabla.setItem(i, 0, QTableWidgetItem(str(d.get('titulo', ''))))
+            self.tabla.setItem(i, 1, QTableWidgetItem(str(d.get('isbn', ''))))
+            self.tabla.setItem(i, 2, QTableWidgetItem(str(d.get('autor', 'Sin Autor'))))
+            self.tabla.setItem(i, 3, QTableWidgetItem(str(d.get('cantidad_disponible', 0))))
+            self.tabla.setItem(i, 4, QTableWidgetItem(str(d.get('stock', 0))))
+
+    def filtrar_tabla(self, texto):
+        texto = texto.lower()
+        for i in range(self.tabla.rowCount()):
+            t_match = texto in (self.tabla.item(i, 0).text().lower() if self.tabla.item(i,0) else "")
+            i_match = texto in (self.tabla.item(i, 1).text().lower() if self.tabla.item(i,1) else "")
+            self.tabla.setRowHidden(i, not (t_match or i_match))
+
     def construir_formulario(self, ctrl_param):
+        self.ultima_ref_param = ctrl_param # Guardamos referencia para refrescos de combos
         self.widget_formulario = QWidget()
         layout_principal = QVBoxLayout(self.widget_formulario)
         
-        layout_principal.addWidget(QLabel("Acciones"))
         layout_modo = QHBoxLayout()
         self.btn_crear = QPushButton("Crear Nuevo")
         self.btn_crear.setCheckable(True)
-        self.btn_crear.setChecked(True)
         self.btn_editar = QPushButton("Editar Existente")
         self.btn_editar.setCheckable(True)
         
@@ -78,45 +116,32 @@ class VistaLibro:
         
         layout_contenido.addWidget(QLabel("ISBN (Identificador)"))
         self.entrada_isbn = QLineEdit()
-        self.entrada_isbn.editingFinished.connect(self.intentar_cargar_edicion)
+        self.entrada_isbn.editingFinished.connect(self.intent_auto_carga)
         layout_contenido.addWidget(self.entrada_isbn)
         
         layout_contenido.addWidget(QLabel("Título"))
         self.entrada_titulo = QLineEdit()
         layout_contenido.addWidget(self.entrada_titulo)
         
-        layout_contenido.addWidget(QLabel("Autor Principal"))
-        self.combo_autor = QComboBox()
-        layout_contenido.addWidget(self.combo_autor)
+        # Selects (QComboBox)
+        self.combo_autor = self._crear_combo(layout_contenido, "Autor", ctrl_param)
+        self.combo_editorial = self._crear_combo(layout_contenido, "Editorial", ctrl_param)
+        self.combo_categoria = self._crear_combo(layout_contenido, "Categoría", ctrl_param)
+        self.combo_genero = self._crear_combo(layout_contenido, "Género", ctrl_param)
         
-        layout_contenido.addWidget(QLabel("Editorial"))
-        self.combo_editorial = QComboBox()
-        layout_contenido.addWidget(self.combo_editorial)
-        
-        layout_contenido.addWidget(QLabel("Categoría"))
-        self.combo_categoria = QComboBox()
-        layout_contenido.addWidget(self.combo_categoria)
-        
-        layout_contenido.addWidget(QLabel("Género"))
-        self.combo_genero = QComboBox()
-        layout_contenido.addWidget(self.combo_genero)
-        
-        # Carga inicial de datos desde el controlador de parámetros
-        self.actualizar_combos(ctrl_param)
-        
-        layout_contenido.addWidget(QLabel("Stock Total"))
+        layout_contenido.addWidget(QLabel("Unidades en Stock"))
         self.entrada_stock = QLineEdit()
-        self.entrada_stock.setValidator(QIntValidator(0, 9999))
+        self.entrada_stock.setValidator(QIntValidator(0, 999))
         layout_contenido.addWidget(self.entrada_stock)
         
-        self.etiqueta_estado = QLabel("Estado del Libro")
-        layout_contenido.addWidget(self.etiqueta_estado)
+        self.etiqueta_estado = QLabel("Estado del Registro")
         self.combo_estado = QComboBox()
-        self.combo_estado.addItems(["ACTIVA", "INACTIVA", "ELIMINADA"])
+        self.combo_estado.addItems(["ACTIVA", "INACTIVA"])
+        layout_contenido.addWidget(self.etiqueta_estado)
         layout_contenido.addWidget(self.combo_estado)
         
         layout_contenido.addStretch()
-        btn_guardar = QPushButton("Guardar Libro")
+        btn_guardar = QPushButton("Guardar Cambios")
         btn_guardar.setObjectName("ActionButton")
         btn_guardar.clicked.connect(self.procesar_guardado)
         layout_contenido.addWidget(btn_guardar)
@@ -125,162 +150,144 @@ class VistaLibro:
         layout_principal.addStretch() 
         
         self.widget_contenido_formulario.hide() 
-        self.establecer_modo('crear', inicial=True)
         return self.widget_formulario
 
-    def actualizar_combos(self, ctrl_param):
-        """Usa el modelo unificado para cargar todos los combos de libros"""
-        if not ctrl_param: return
-        
-        combos_config = [
-            (self.combo_autor, "Autor", "Seleccione Autor"),
-            (self.combo_editorial, "Editorial", "Seleccione Editorial"),
-            (self.combo_categoria, "Categoría", "Seleccione Categoría"),
-            (self.combo_genero, "Género", "Seleccione Género")
-        ]
-
-        for combo, rubro, placeholder in combos_config:
-            combo.clear()
-            combo.addItem(placeholder, None)
-            try:
-                # Acceso directo al modelo del controlador unificado
-                datos = ctrl_param.model.obtener_lista_activos(rubro)
-                for d in datos:
-                    combo.addItem(d['nombre'], d['id'])
-            except Exception as e:
-                print(f"Error cargando rubro {rubro}: {e}")
-
     def establecer_modo(self, modo, inicial=False):
-        self.ctrl.modo = modo
-        if modo == 'crear':
-            self.btn_crear.setChecked(True)
+        if inicial:
+            self.btn_crear.setChecked(False)
             self.btn_editar.setChecked(False)
-            self.entrada_isbn.setReadOnly(False)
+            self.widget_contenido_formulario.hide()
+            return
+
+        self.ctrl.modo = modo
+        self.btn_crear.setChecked(modo == 'crear')
+        self.btn_editar.setChecked(modo == 'editar')
+        
+        self.limpiar_formulario()
+        self.entrada_isbn.setReadOnly(False)
+        
+        if modo == 'crear':
             self.etiqueta_estado.hide()
             self.combo_estado.hide()
-            self.limpiar_formulario()
         else:
-            self.btn_crear.setChecked(False)
-            self.btn_editar.setChecked(True)
-            self.entrada_isbn.setReadOnly(False)
             self.etiqueta_estado.show()
             self.combo_estado.show()
-            self.limpiar_formulario()
             
-        if not inicial and self.widget_contenido_formulario:
-            self.widget_contenido_formulario.show()
+        self.widget_contenido_formulario.show()
+        # Al abrir el formulario, forzamos recarga de combos por si hubo cambios en Parámetros
+        self.cargar_combos()
 
-    def limpiar_formulario(self):
-        self.entrada_titulo.clear()
-        self.entrada_isbn.clear()
-        self.entrada_stock.clear()
-        if self.combo_autor: self.combo_autor.setCurrentIndex(0)
-        if self.combo_editorial: self.combo_editorial.setCurrentIndex(0)
-        if self.combo_categoria: self.combo_categoria.setCurrentIndex(0)
-        if self.combo_genero: self.combo_genero.setCurrentIndex(0)
-        if self.combo_estado: self.combo_estado.setCurrentText('ACTIVA')
+    def _crear_combo(self, layout, rubro, ctrl_param):
+        layout.addWidget(QLabel(rubro))
+        combo = QComboBox()
+        self._cargar_datos_combo(combo, rubro, ctrl_param)
+        layout.addWidget(combo)
+        return combo
 
-    def cargar_datos_tabla(self):
-        """Solicita los datos al controlador y los dibuja"""
-        if not self.tabla: return
-        datos = self.ctrl.obtener_todos()
-        self.tabla.setRowCount(0)
-        for i, d in enumerate(datos):
-            self.tabla.insertRow(i)
-            self.tabla.setItem(i, 0, QTableWidgetItem(str(d.get('titulo', '')))) 
-            self.tabla.setItem(i, 1, QTableWidgetItem(str(d.get('isbn', ''))))
-            self.tabla.setItem(i, 2, QTableWidgetItem(str(d.get('Autor', 'Sin Autor'))))
-            self.tabla.setItem(i, 3, QTableWidgetItem(str(d.get('Stock', 0))))
-            self.tabla.setItem(i, 4, QTableWidgetItem(str(d.get('Cantidad_Disponible', 0))))
+    def cargar_combos(self):
+        """Método público para el Refresco Agresivo desde MainWindow."""
+        if not self.ultima_ref_param: return
+        
+        self._cargar_datos_combo(self.combo_autor, "Autor", self.ultima_ref_param)
+        self._cargar_datos_combo(self.combo_editorial, "Editorial", self.ultima_ref_param)
+        self._cargar_datos_combo(self.combo_categoria, "Categoría", self.ultima_ref_param)
+        self._cargar_datos_combo(self.combo_genero, "Género", self.ultima_ref_param)
 
-    def filtrar_tabla(self, texto):
-        if not self.tabla: return
-        texto = texto.lower()
-        for i in range(self.tabla.rowCount()):
-            coincidencia = False
-            for j in range(self.tabla.columnCount()):
-                item = self.tabla.item(i, j)
-                if j in [0, 1] and item and texto in item.text().lower():
-                    coincidencia = True
-                    break
-            self.tabla.setRowHidden(i, not coincidencia)
+    def _cargar_datos_combo(self, combo, rubro, ctrl_param):
+        if not combo: return
+        # Guardar selección actual para intentar restaurarla tras el refresco
+        id_actual = combo.currentData()
+        
+        combo.clear()
+        try:
+            datos = ctrl_param.model.obtener_lista_activos(rubro)
+            combo.addItem(f"Seleccione {rubro}", None)
+            for d in datos:
+                combo.addItem(d['nombre'], d['id'])
+            
+            # Intentar volver a seleccionar lo que estaba antes del refresco
+            if id_actual:
+                index = combo.findData(id_actual)
+                if index != -1: combo.setCurrentIndex(index)
+        except Exception as e:
+            print(f"Error cargando {rubro} en Libros: {e}")
+
+    def solicitar_edicion_desde_tabla(self, index):
+        fila = index.row()
+        item_isbn = self.tabla.item(fila, 1)
+        if not item_isbn: return
+        
+        isbn = item_isbn.text()
+        self.establecer_modo('editar')
+        self.entrada_isbn.setText(isbn)
+        self.intentar_cargar_edicion()
+
+    def intent_auto_carga(self):
+        if hasattr(self.ctrl, 'modo') and self.ctrl.modo == 'editar':
+            self.intentar_cargar_edicion()
 
     def intentar_cargar_edicion(self):
-        if self.ctrl.modo != 'editar': return
         isbn = self.entrada_isbn.text().strip()
-        if not isbn: 
-            self.limpiar_formulario()
-            return
+        if not isbn: return
             
         libro = self.ctrl.obtener_por_isbn(isbn)
         if libro:
-            QMessageBox.information(None, "Éxito", "Libro localizado en el archivo.")
-            self.entrada_titulo.setText(libro['titulo'])
-            estado_bd = libro.get('estado')
-            self.combo_estado.setCurrentText(estado_bd if estado_bd != 'INACTIVO' else 'INACTIVA')
+            self.entrada_titulo.setText(libro.get('titulo', ''))
             self.entrada_stock.setText(str(libro.get('stock_total') or 0))
+            estado_db = libro.get('estado', 'ACTIVO')
+            self.combo_estado.setCurrentText('ACTIVA' if estado_db == 'ACTIVO' else 'INACTIVA')
             
-            # Mapeo de IDs para posicionar los ComboBox
             mapeo = [
                 (self.combo_autor, 'primer_id_autor'), 
                 (self.combo_editorial, 'primer_id_editorial'),
-                (self.combo_categoria, 'primer_id_categoria'),
+                (self.combo_categoria, 'primer_id_categoria'), 
                 (self.combo_genero, 'primer_id_genero')
             ]
             for combo, key in mapeo:
-                if libro.get(key):
-                    idx = combo.findData(libro[key])
-                    if idx != -1: combo.setCurrentIndex(idx)
+                id_val = libro.get(key)
+                idx = combo.findData(id_val)
+                combo.setCurrentIndex(idx if idx != -1 else 0)
             
             self.entrada_isbn.setReadOnly(True) 
-        else:
-            QMessageBox.warning(None, "Aviso", "No se encontró ningún registro con ese ISBN.")
 
     def procesar_guardado(self):
-        isbn = self.entrada_isbn.text().strip()
-        titulo = self.entrada_titulo.text().strip()
-        
         try:
-            stock_str = self.entrada_stock.text().strip()
-            stock = int(stock_str) if stock_str else 0
-            if stock < 0: raise ValueError
-        except ValueError:
-            QMessageBox.warning(None, "Error", "El Stock debe ser un valor numérico válido.")
-            return
+            datos = {
+                'isbn': self.entrada_isbn.text().strip(),
+                'titulo': self.entrada_titulo.text().strip(),
+                'stock': int(self.entrada_stock.text() or 0),
+                'id_autor': self.combo_autor.currentData(),
+                'id_editorial': self.combo_editorial.currentData(),
+                'id_categoria': self.combo_categoria.currentData(),
+                'id_genero': self.combo_genero.currentData(),
+                'estado': 'ACTIVO' if self.combo_estado.currentText() == 'ACTIVA' else 'INACTIVO'
+            }
 
-        id_autor = self.combo_autor.currentData()
-        id_editorial = self.combo_editorial.currentData()
-        id_categoria = self.combo_categoria.currentData()
-        id_genero = self.combo_genero.currentData()
+            if not datos['isbn'] or not datos['titulo'] or not datos['id_autor']:
+                QMessageBox.warning(None, "Faltan datos", "ISBN, Título y Autor son obligatorios.")
+                return
 
-        if not isbn or not titulo or not id_autor:
-            QMessageBox.warning(None, "Datos Faltantes", "ISBN, Título y Autor son obligatorios.")
-            return
+            es_act = (getattr(self.ctrl, 'modo', 'crear') == 'editar')
+            self.ctrl.guardar_bd(
+                datos['titulo'], datos['isbn'], datos['id_autor'], 
+                datos['id_editorial'], datos['id_categoria'], datos['id_genero'], 
+                datos['stock'], datos['estado'], es_act
+            )
 
-        try:
-            if self.ctrl.modo == 'crear':
-                if self.ctrl.obtener_por_isbn(isbn):
-                    QMessageBox.warning(None, "Error", "Este ISBN ya existe en el sistema.")
-                    return
-                self.ctrl.guardar_bd(titulo, isbn, id_autor, id_editorial, id_categoria, id_genero, stock, 'ACTIVO', False)
-                QMessageBox.information(None, "Éxito", "Nuevo libro registrado con éxito.")
-            else:
-                estado_ui = self.combo_estado.currentText()
-                if estado_ui == 'ELIMINADA':
-                    confirmar = QMessageBox.question(None, "Confirmar", "¿Eliminar este libro por completo?", QMessageBox.Yes | QMessageBox.No)
-                    if confirmar == QMessageBox.Yes:
-                        self.ctrl.eliminar_todo(isbn)
-                        QMessageBox.information(None, "Info", "Libro eliminado permanentemente.")
-                    else: return
-                else:
-                    estado_bd = 'INACTIVO' if estado_ui == 'INACTIVA' else 'ACTIVO'
-                    self.ctrl.guardar_bd(titulo, isbn, id_autor, id_editorial, id_categoria, id_genero, stock, estado_bd, True)
-                    QMessageBox.information(None, "Info", "Registro actualizado correctamente.")
+            # EMISIÓN DE SEÑAL DE ÉXITO (Para que MainWindow dispare el Refresco Agresivo)
+            if hasattr(self.ctrl, 'libro_guardado'):
+                self.ctrl.libro_guardado.emit() 
             
-            # Post-guardado: Refrescar UI
-            self.cargar_datos_tabla()
+            QMessageBox.information(None, "Éxito", "Cambios aplicados correctamente.")
+            self.establecer_modo('crear', inicial=True)
             self.limpiar_formulario()
-            self.ctrl.libro_guardado.emit()
-            
+
         except Exception as e:
-            QMessageBox.critical(None, "Error Crítico", f"Fallo en la operación: {str(e)}")
+            QMessageBox.critical(None, "Error", f"Error en el guardado: {e}")
+
+    def limpiar_formulario(self):
+        self.entrada_isbn.clear()
+        self.entrada_titulo.clear()
+        self.entrada_stock.clear()
+        for combo in [self.combo_autor, self.combo_editorial, self.combo_categoria, self.combo_genero]:
+            if combo: combo.setCurrentIndex(0)

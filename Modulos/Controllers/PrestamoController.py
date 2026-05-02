@@ -2,23 +2,29 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QComboBox, 
     QPushButton, QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox, QDateEdit
 )
-from PySide6.QtCore import Qt, QDate
+from PySide6.QtCore import Qt, QDate, Signal, QObject
 from Modulos.Config import Conexion
 
-class ControladorPrestamo:
+
+class ControladorPrestamo(QObject): 
+    datos_actualizados = Signal()   # ← Agregado para que MainWindow pueda llamarlo
+
     def __init__(self):
+        super().__init__()
         self.bd = Conexion().obtener_conexion()
         self.widget_vista = None
         self.widget_formulario = None
         self.tabla = None
         self.modo = 'crear'
 
+    # ==================== BASE DE DATOS ====================
+
     def obtener_todos(self):
         cursor = self.bd.cursor(dictionary=True)
         consulta = """
             SELECT u.email AS Usuario, i.titulo AS Item, 
-                    DATE_FORMAT(p.fecha_prestamo, '%Y-%m-%d') AS 'Fecha Inicio', 
-                    p.estado_prestamo AS Estado
+                   DATE_FORMAT(p.fecha_prestamo, '%Y-%m-%d') AS 'Fecha Inicio', 
+                   p.estado_prestamo AS Estado
             FROM prestamos p
             JOIN usuarios u ON p.id_usuario = u.id_usuario
             JOIN insumos i ON p.id_insumo = i.id_insumo
@@ -90,8 +96,12 @@ class ControladorPrestamo:
         finally:
             cursor.close()
 
+    # ==================== WIDGETS Y VISTA ====================
+
     def obtener_widget_vista(self):
-        if self.widget_vista: return self.widget_vista
+        if self.widget_vista:
+            return self.widget_vista
+
         self.widget_vista = QWidget()
         layout = QVBoxLayout(self.widget_vista)
         layout.addWidget(QLabel("Gestión de Préstamos")) 
@@ -105,33 +115,38 @@ class ControladorPrestamo:
         self.tabla.setHorizontalHeaderLabels(["Usuario", "Item", "Fecha Inicio", "Estado"])
         self.tabla.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         layout.addWidget(self.tabla)
+        
         self.cargar_datos()
         return self.widget_vista
 
     def obtener_widget_formulario(self, ctrl_param): 
-        if self.widget_formulario: return self.widget_formulario
+        if self.widget_formulario:
+            return self.widget_formulario
+
         self.widget_formulario = QWidget()
         layout = QVBoxLayout(self.widget_formulario)
         
         layout_modo = QHBoxLayout()
         self.btn_crear = QPushButton("Crear Nuevo")
-        self.btn_crear.setCheckable(True); self.btn_crear.setChecked(True)
+        self.btn_crear.setCheckable(True)
+        self.btn_crear.setChecked(True)
         self.btn_editar = QPushButton("Editar Existente")
         self.btn_editar.setCheckable(True)
         self.btn_crear.clicked.connect(self.establecer_crear)
         self.btn_editar.clicked.connect(self.establecer_editar)
-        layout_modo.addWidget(self.btn_crear); layout_modo.addWidget(self.btn_editar)
+        layout_modo.addWidget(self.btn_crear)
+        layout_modo.addWidget(self.btn_editar)
         layout.addLayout(layout_modo)
         
-        layout.addWidget(QLabel("Email Usuario (ID)"))
+        layout.addWidget(QLabel("Email Usuario"))
         self.entrada_email = QLineEdit()
         layout.addWidget(self.entrada_email)
         
-        layout.addWidget(QLabel("Nombre Item (ID)"))
+        layout.addWidget(QLabel("Nombre Item"))
         self.entrada_item = QLineEdit()
         layout.addWidget(self.entrada_item)
         
-        layout.addWidget(QLabel("Fecha Inicio (ID)"))
+        layout.addWidget(QLabel("Fecha Inicio"))
         self.entrada_fecha = QDateEdit(calendarPopup=True)
         self.entrada_fecha.setDate(QDate.currentDate())
         self.entrada_fecha.setDisplayFormat("yyyy-MM-dd")
@@ -163,13 +178,15 @@ class ControladorPrestamo:
 
     def establecer_crear(self):
         self.modo = 'crear'
-        self.btn_crear.setChecked(True); self.btn_editar.setChecked(False)
+        self.btn_crear.setChecked(True)
+        self.btn_editar.setChecked(False)
         self.combo_estado.hide()
         self.limpiar_formulario()
 
     def establecer_editar(self):
         self.modo = 'editar'
-        self.btn_crear.setChecked(False); self.btn_editar.setChecked(True)
+        self.btn_crear.setChecked(False)
+        self.btn_editar.setChecked(True)
         self.combo_estado.show()
         self.limpiar_formulario()
 
@@ -182,6 +199,8 @@ class ControladorPrestamo:
 
     def cargar_datos(self):
         datos = self.obtener_todos()
+        if self.tabla is None:
+            return
         self.tabla.setRowCount(0)
         for i, d in enumerate(datos):
             self.tabla.insertRow(i)
@@ -202,29 +221,28 @@ class ControladorPrestamo:
             self.tabla.setRowHidden(i, not coincidencia)
 
     def intentar_cargar_edicion(self):
-        if self.modo != 'editar': return
+        if self.modo != 'editar': 
+            return
         
         email = self.entrada_email.text().strip()
         item = self.entrada_item.text().strip()
         fecha = self.entrada_fecha.date().toString("yyyy-MM-dd")
         
-        if not email or not item: return
+        if not email or not item: 
+            return
         
         prestamo = self.obtener_uno(email, item, fecha)
         
         if prestamo:
-            self.combo_estado.setCurrentText(prestamo['estado_prestamo'])
-            
+            self.combo_estado.setCurrentText(prestamo.get('estado_prestamo', 'ACTIVO'))
             fecha_fin_str = prestamo.get('fecha_devolucion_esperada')
             if fecha_fin_str:
                 self.entrada_fecha_fin.setDate(QDate.fromString(str(fecha_fin_str), "yyyy-MM-dd"))
-            
-            QMessageBox.information(None, "Carga Exitosa", "Préstamo encontrado y datos cargados para edición.")
+            QMessageBox.information(None, "Carga Exitosa", "Préstamo encontrado y datos cargados.")
         else:
             self.entrada_fecha_fin.setDate(QDate.currentDate().addDays(7))
-            self.combo_estado.setCurrentIndex(0) 
-            QMessageBox.warning(None, "Aviso", "Préstamo no encontrado con esa clave compuesta.")
-
+            self.combo_estado.setCurrentIndex(0)
+            QMessageBox.warning(None, "Aviso", "Préstamo no encontrado.")
 
     def manejar_guardado(self):
         email = self.entrada_email.text().strip()
@@ -241,28 +259,26 @@ class ControladorPrestamo:
         try:
             if self.modo == 'crear':
                 if existe:
-                    QMessageBox.warning(None, "Error", "Ya existe este Préstamo (Clave Compuesta Duplicada).")
+                    QMessageBox.warning(None, "Error", "Ya existe este Préstamo.")
                     return
-                
                 self.guardar_bd(email, item, fecha, fin, "ACTIVO", False)
                 QMessageBox.information(None, "Éxito", "Préstamo creado.")
-                
             else:
                 if not existe:
                     QMessageBox.warning(None, "Error", "Préstamo no encontrado para editar.")
                     return
-                
                 estado = self.combo_estado.currentText()
-                
                 if estado == 'ELIMINADA':
                     self.eliminar_fisico(email, item, fecha)
                     QMessageBox.information(None, "Info", "Préstamo eliminado físicamente.")
-                else: 
+                else:
                     self.guardar_bd(email, item, fecha, fin, estado, True)
                     QMessageBox.information(None, "Info", "Préstamo actualizado.")
                     
+            # ==================== RECARGA PROFUNDA ====================
             self.cargar_datos()
             self.limpiar_formulario()
-            
+            self.datos_actualizados.emit()     # ← Llama a Recuperar_Recargar_Verter_Variables en MainWindow
+
         except Exception as e:
             QMessageBox.critical(None, "Error", str(e))

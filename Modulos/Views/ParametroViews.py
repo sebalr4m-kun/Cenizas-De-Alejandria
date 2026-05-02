@@ -58,7 +58,7 @@ class FormularioParametro(QWidget):
         self.layout_contenido.addWidget(self.etiqueta_estado)
         
         self.combo_estado = QComboBox()
-        self.combo_estado.addItems(["ACTIVO", "INACTIVO", "ELIMINADA"]) 
+        self.combo_estado.addItems(["ACTIVO", "INACTIVO"]) 
         self.layout_contenido.addWidget(self.combo_estado)
         
         layout_principal.addWidget(self.widget_contenido)
