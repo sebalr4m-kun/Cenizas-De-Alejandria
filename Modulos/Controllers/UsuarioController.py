@@ -10,17 +10,17 @@ class ControladorUsuario(QObject):
     # Señal para actualizar la tabla en el Main
     datos_actualizados = Signal()
     # Señal Maestra para notificaciones: (tipo, titulo, mensaje, datos_extra)
-    # tipos: 'info', 'warn', 'crit', 'success', 'validador', 'emergencia'
+    # tipos: 'info', 'warn', 'crit', 'success', 'validador_cuenta', 'emergencia', 'recovery_trigger'
     solicitar_notificacion = Signal(str, str, str, object)
 
     def __init__(self):
         super().__init__()
-        # Importación diferida para evitar ciclos
+        # Importación diferida para evitar ciclos de importación con las Vistas
         from Modulos.Views.UsuarioViews import VistaUsuario
         self.model = UsuarioModel()
         self.vista = VistaUsuario()
         
-        # VÍNCULO DE CONTROL: Permite que la vista regrese datos al controlador
+        # --- VÍNCULO DE CONTROL CRÍTICO ---
         self.vista.parent_controller = self
         
         self.modo = 'crear'
@@ -29,13 +29,13 @@ class ControladorUsuario(QObject):
         self.conectar_senales()
 
     def conectar_senales(self):
+        """Sincroniza la lógica del controlador con los eventos de la interfaz"""
         v = self.vista
         
-        # --- CONEXIÓN CRÍTICA FALTANTE ---
-        # Conecta la señal maestra del controlador al manejador visual de la vista
+        # Conexión de la señal maestra al manejador visual de notificaciones y diálogos
         self.solicitar_notificacion.connect(v.mostrar_notificacion)
         
-        # Conexiones de botones y eventos
+        # Eventos de Interfaz
         v.btn_modo_crear.clicked.connect(self.establecer_modo_crear)
         v.btn_modo_editar.clicked.connect(self.establecer_modo_editar)
         v.btn_guardar.clicked.connect(self.manejar_guardado)
@@ -45,13 +45,13 @@ class ControladorUsuario(QObject):
         v.entrada_pass_actual.textChanged.connect(self.verificar_pass_tiempo_real)
         v.combo_tipo_cuenta.currentTextChanged.connect(self.alternar_contrasena)
 
-    # ==================== MÉTODOS DE UI (LÓGICA) ====================
+    # ==================== MÉTODOS DE INTEGRACIÓN UI ====================
+    
     def obtener_widget_vista(self):
-        """Devuelve el widget de listado ya existente en la vista."""
+        self.cargar_datos()
         return self.vista.widget_listado
 
     def obtener_widget_formulario(self, ctrl_param=None):
-        """Prepara y devuelve el widget de formulario existente."""
         self.cargar_combos()
         self.establecer_modo_crear(inicial=True)
         return self.vista.widget_formulario
@@ -78,7 +78,7 @@ class ControladorUsuario(QObject):
         self.vista.etiqueta_estado.hide()
         self.vista.combo_estado_cuenta.hide()
         self.limpiar_formulario()
-        self.alternar_contrasena("")
+        self.alternar_contrasena()
         if not inicial and hasattr(self.vista, 'widget_contenido_formulario'):
             self.vista.widget_contenido_formulario.show()
 
@@ -90,7 +90,7 @@ class ControladorUsuario(QObject):
         self.vista.etiqueta_estado.show()
         self.vista.combo_estado_cuenta.show()
         self.limpiar_formulario()
-        self.alternar_contrasena("")
+        self.alternar_contrasena()
         if hasattr(self.vista, 'widget_contenido_formulario'):
             self.vista.widget_contenido_formulario.show()
 
@@ -99,6 +99,11 @@ class ControladorUsuario(QObject):
         self.vista.entrada_email.clear()
         self.vista.entrada_pass_actual.clear()
         self.vista.entrada_pass_nueva.clear()
+        
+        # Limpieza dinámica si el componente existe tras la inyección visual
+        if hasattr(self.vista, 'entrada_pass_confirmar'):
+            self.vista.entrada_pass_confirmar.clear()
+            
         self.vista.btn_guardar.setEnabled(True)
         self.vista.btn_guardar.setStyleSheet("")
         self.vista.entrada_pass_actual.setStyleSheet("")
@@ -119,9 +124,13 @@ class ControladorUsuario(QObject):
         self.vista.btn_recuperar_pass.setVisible(mostrar_antiguos)
 
     def alternar_contrasena(self, _=None):
-        es_biblio = self.vista.combo_tipo_cuenta.currentText() == "Bibliotecario"
-        self.vista.etiqueta_pass_nueva.setVisible(es_biblio)
-        self.vista.entrada_pass_nueva.setVisible(es_biblio)
+        rol = self.vista.combo_tipo_cuenta.currentText()
+        if hasattr(self.vista, 'ajustar_visibilidad_campos_seguridad'):
+            self.vista.ajustar_visibilidad_campos_seguridad(rol)
+        else:
+            es_biblio = (rol == "Bibliotecario")
+            self.vista.etiqueta_pass_nueva.setVisible(es_biblio)
+            self.vista.entrada_pass_nueva.setVisible(es_biblio)
         self.restaurar_visibilidad_recovery()
 
     def cargar_datos(self):
@@ -138,7 +147,7 @@ class ControladorUsuario(QObject):
         texto = texto.lower()
         for i in range(self.vista.tabla.rowCount()):
             match = any(texto in str(self.vista.tabla.item(i, j).text()).lower() 
-                       for j in range(4) if self.vista.tabla.item(i, j))
+                        for j in range(4) if self.vista.tabla.item(i, j))
             self.vista.tabla.setRowHidden(i, not match)
 
     def verificar_pass_tiempo_real(self, texto=""):
@@ -146,17 +155,19 @@ class ControladorUsuario(QObject):
             self.vista.btn_guardar.setEnabled(True)
             self.vista.entrada_pass_actual.setStyleSheet("")
             return
+            
         if PasswordHasher.verify(texto, self.pass_actual_bd):
             self.vista.btn_guardar.setEnabled(True)
-            self.vista.entrada_pass_actual.setStyleSheet("border: 2px solid green;")
+            self.vista.entrada_pass_actual.setStyleSheet("border: 2px solid #2ecc71;") 
         else:
             self.vista.btn_guardar.setEnabled(False)
-            self.vista.entrada_pass_actual.setStyleSheet("border: 2px solid red;" if texto else "")
+            self.vista.entrada_pass_actual.setStyleSheet("border: 2px solid #e74c3c;" if texto else "")
 
     def al_terminar_edicion_email(self):
         if self.modo != 'editar': return
         email = self.vista.entrada_email.text().strip()
         if not email: return
+        
         usuario = self.model.obtener_por_email(email)
         if usuario:
             self.vista.entrada_nombre.setText(usuario['nombre'])
@@ -171,9 +182,22 @@ class ControladorUsuario(QObject):
             self.solicitar_notificacion.emit('warn', "No encontrado", "Usuario no registrado.", None)
 
     def proceso_recuperacion_emergencia(self):
-        self.solicitar_notificacion.emit('recovery_trigger', "", "", None)
+        """Prepara los datos necesarios y cede el control visual al PasswordRecover"""
+        email = self.vista.entrada_email.text().strip()
+        if not email:
+            self.solicitar_notificacion.emit('warn', "Datos Requeridos", "Escriba el correo electrónico para iniciar la recuperación.", None)
+            return
+
+        usuario = self.model.obtener_por_email(email)
+        if not usuario:
+            self.solicitar_notificacion.emit('warn', "Error", "El correo ingresado no pertenece a un usuario registrado.", None)
+            return
+
+        # Emitimos el trigger con todos los datos necesarios para que la Vista levante el Validador
+        self.solicitar_notificacion.emit('recovery_trigger', "Recuperación de Cuenta", email, usuario)
 
     def validar_identidad_finalizada(self, exito, email=None):
+        """Callback llamado por la Vista tras el diálogo de recuperación/validación"""
         if exito:
             if email:
                 self.vista.entrada_email.setText(email)
@@ -181,9 +205,10 @@ class ControladorUsuario(QObject):
             self.es_upgrade_a_bibliotecario = True
             self.restaurar_visibilidad_recovery()
             self.vista.btn_guardar.setEnabled(True)
-            self.solicitar_notificacion.emit('success', "Éxito", "Identidad confirmada.", None)
+            self.solicitar_notificacion.emit('success', "Identidad Confirmada", "Acceso de edición concedido.", None)
 
-    # ==================== LÓGICA DE GUARDADO ====================
+    # ==================== LÓGICA DE PERSISTENCIA ====================
+    
     def manejar_guardado(self):
         nombre = self.vista.entrada_nombre.text().strip()
         email = self.vista.entrada_email.text().strip()
@@ -192,63 +217,76 @@ class ControladorUsuario(QObject):
         nueva_pwd = self.vista.entrada_pass_nueva.text().strip()
         pass_actual = self.vista.entrada_pass_actual.text().strip()
 
-        # Validaciones básicas que ahora SÍ dispararán alertas
+        # Validaciones Base
         if not nombre or not email:
-            self.solicitar_notificacion.emit('warn', "Campos Incompletos", "Nombre y Email obligatorios.", None)
-            return
+            self.solicitar_notificacion.emit('warn', "Datos Faltantes", "Nombre y Email son campos obligatorios.", None)
+            return False
 
         if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', email):
-            self.solicitar_notificacion.emit('warn', "Email Inválido", "Formato de correo no reconocido.", None)
-            return
+            self.solicitar_notificacion.emit('warn', "Formato Inválido", "El correo ingresado no es válido.", None)
+            return False
+
+        # Validación Cruzada de Contraseñas delegada a la Vista
+        if hasattr(self.vista, 'verificar_coincidencia_contrasenas'):
+            if not self.vista.verificar_coincidencia_contrasenas():
+                return False
 
         try:
             pals = []
             if self.modo == 'crear':
                 if self.model.obtener_por_email(email):
-                    self.solicitar_notificacion.emit('warn', "Duplicado", "El email ya existe.", None)
-                    return
+                    self.solicitar_notificacion.emit('warn', "Conflicto", "Este email ya se encuentra registrado.", None)
+                    return False
                 
                 if tipo_str == "Bibliotecario" and not nueva_pwd:
-                    self.solicitar_notificacion.emit('warn', "Seguridad", "Se requiere contraseña para Bibliotecarios.", None)
-                    return
+                    self.solicitar_notificacion.emit('warn', "Seguridad", "Los Bibliotecarios requieren una contraseña inicial.", None)
+                    return False
 
                 hay_senal = ValidadorCuenta.verificar_conexion()
-                pals = self.model.guardar_bd(nombre, email, id_tipo, "ACTIVA", nueva_pwd, False)
+                
+                # Ejecutamos el insert con los 7 parámetros bien definidos (forzar_palabras = False)
+                pals = self.model.guardar_bd(nombre, email, id_tipo, "ACTIVA", nueva_pwd, False, False)
                 
                 if tipo_str == "Bibliotecario" and hay_senal:
-                    # Lanza el diálogo de validación en la vista
                     self.solicitar_notificacion.emit('validador_cuenta', "Validación Requerida", email, pals)
-                    return
+                    return True
 
-                msg = f"Usuario '{nombre}' creado." + (" (Auto-validado)" if not hay_senal else "")
+                msg = f"Usuario '{nombre}' creado en modo offline."
             
-            else: # Modo Editar
+            else: # MODO EDITAR
                 estado = self.vista.combo_estado_cuenta.currentText()
                 if estado == "SUSPENDIDA":
                     self.model.eliminar_logico(email)
-                    msg = "Usuario suspendido."
+                    msg = "La cuenta ha sido suspendida."
                 elif estado == "ELIMINADA":
                     self.model.eliminar_fisico(email)
-                    msg = "Usuario eliminado físicamente."
+                    msg = "Registro eliminado permanentemente."
                 else:
                     pwd_a_usar = nueva_pwd if (nueva_pwd or self.es_upgrade_a_bibliotecario) else pass_actual
                     pals = self.model.guardar_bd(nombre, email, id_tipo, "ACTIVA", pwd_a_usar, True, self.es_upgrade_a_bibliotecario)
-                    msg = "Datos actualizados."
+                    msg = "Información de perfil actualizada."
 
             self.finalizar_operacion(msg, pals)
+            return True
 
         except Exception as e:
-            self.solicitar_notificacion.emit('crit', "Error BD", str(e), None)
+            self.solicitar_notificacion.emit('crit', "Error Crítico", str(e), None)
+            return False
 
     def finalizar_operacion(self, mensaje, palabras=None):
-        self.solicitar_notificacion.emit('success', "Operación Exitosa", mensaje, None)
         if palabras:
-            self.solicitar_notificacion.emit('emergencia', "Palabras Maestras", "", palabras)
-        
+            try:
+                self.solicitar_notificacion.emit('emergencia', "Credenciales de Recuperación", "", palabras)
+            except Exception as e:
+                pals_formateadas = ", ".join(palabras) if isinstance(palabras, list) else str(palabras)
+                mensaje += f"\n\n⚠️ [RESPALDO CRÍTICO - PALABRAS MAESTRAS]:\n{pals_formateadas}"
+            
+        self.solicitar_notificacion.emit('success', "Operación Exitosa", mensaje, None)
         self.cargar_datos()
         self.datos_actualizados.emit()
         self.limpiar_formulario()
 
     def abortar_creacion(self, email):
         self.model.eliminar_fisico(email)
-        self.solicitar_notificacion.emit('crit', "Abortado", "Cuenta no validada. Se ha eliminado el registro.", None)
+        self.solicitar_notificacion.emit('crit', "Validación Fallida", "El proceso de creación fue abortado por seguridad.", None)
+        self.limpiar_formulario()

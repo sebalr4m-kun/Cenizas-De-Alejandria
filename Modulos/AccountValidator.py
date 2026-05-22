@@ -1,100 +1,202 @@
-import re
+import random
 import socket
+import smtplib
+from email.mime.text import MIMEText
 from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QLabel, QLineEdit, QPushButton, QMessageBox
+    QDialog, QVBoxLayout, QLabel, QLineEdit, 
+    QPushButton, QMessageBox, QApplication
 )
 from PySide6.QtCore import Qt
 
 class ValidadorCuenta(QDialog):
     """
     Controlador visual para la validación de correos electrónicos.
-    Compara las palabras maestras ingresadas con las generadas por el sistema
-    en el momento de la creación.
+    Refactorizado para coincidir con el estilo y lógica de PasswordRecover,
+    solicitando únicamente 3 palabras al azar y asistiendo en el debugging.
     """
-    def __init__(self, palabras_correctas, padre=None):
-        super().__init__(padre)
-        # Normalizamos las palabras para evitar fallos por espacios o mayúsculas
-        self.palabras_correctas = [p.strip().lower() for p in palabras_correctas]
-        self.intentos_restantes = 3
-        
-        self.setWindowTitle("VALIDACIÓN DE IDENTIDAD - CENIZAS DE ALEJANDRÍA")
-        self.setFixedSize(400, 280)
-        self.setModal(True)
-        # Bloqueamos el cierre accidental (debe validar o fallar)
-        self.setWindowFlags(Qt.WindowTitleHint | Qt.CustomizeWindowHint)
-
-        self.init_ui()
-
-    def init_ui(self):
-        layout = QVBoxLayout(self)
-
-        titulo = QLabel("Verificación de Bibliotecario")
-        titulo.setStyleSheet("font-weight: bold; font-size: 16px; color: #00FF00;")
-        titulo.setAlignment(Qt.AlignCenter)
-        layout.addWidget(titulo)
-
-        instrucciones = QLabel(
-            "Se ha enviado un código de seguridad a su correo.\n"
-            "Por favor, ingrese las palabras maestras para activar su cuenta."
-        )
-        instrucciones.setWordWrap(True)
-        instrucciones.setAlignment(Qt.AlignCenter)
-        layout.addWidget(instrucciones)
-
-        self.entrada_codigo = QLineEdit()
-        self.entrada_codigo.setPlaceholderText("Pegue o escriba sus palabras aquí...")
-        self.entrada_codigo.setMinimumHeight(40)
-        self.entrada_codigo.setStyleSheet("""
-            background-color: #1e1e1e; 
-            color: #00FF00; 
-            font-family: 'Consolas';
-            border: 1px solid #333;
-        """)
-        layout.addWidget(self.entrada_codigo)
-
-        self.lbl_intentos = QLabel(f"Intentos restantes: {self.intentos_restantes}")
-        self.lbl_intentos.setStyleSheet("color: #FF8800; font-weight: bold;")
-        self.lbl_intentos.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.lbl_intentos)
-
-        self.btn_validar = QPushButton("Validar y Activar")
-        self.btn_validar.setMinimumHeight(45)
-        self.btn_validar.setStyleSheet("""
-            QPushButton { background-color: #4CAF50; color: white; font-weight: bold; border-radius: 4px; }
-            QPushButton:hover { background-color: #45a049; }
-        """)
-        self.btn_validar.clicked.connect(self.verificar_codigo)
-        layout.addWidget(self.btn_validar)
-
-    def verificar_codigo(self):
-        # Regex para extraer solo palabras (ignora números de lista como '1. hola')
-        texto_usuario = self.entrada_codigo.text().strip().lower()
-        palabras_usuario = re.findall(r'[a-z]+', texto_usuario)
-
-        # Validación de secuencia exacta
-        if len(palabras_usuario) == len(self.palabras_correctas) and \
-           all(p == c for p, c in zip(palabras_usuario, self.palabras_correctas)):
-            QMessageBox.information(self, "Éxito", "Identidad confirmada. La cuenta ha sido activada.")
-            self.accept()
-        else:
-            self.intentos_restantes -= 1
-            self.lbl_intentos.setText(f"Intentos restantes: {self.intentos_restantes}")
-            
-            if self.intentos_restantes <= 0:
-                QMessageBox.critical(self, "Error Crítico", 
-                    "Validación fallida. La cuenta no será creada por seguridad.")
-                self.reject()
+    def __init__(self, palabras_completas, email_usuario, padre=None):
+        # --- PARCHE DE RESCATE ---
+        # Detecta si 'email_usuario' recibió erróneamente el objeto visual (VistaUsuario)
+        # desde UsuarioViews.py en lugar de la cadena de texto del correo.
+        if not isinstance(email_usuario, str):
+            padre_real = email_usuario
+            # Rescatamos el string del email leyendo directamente la caja de texto de la vista
+            if hasattr(padre_real, 'entrada_email'):
+                email_rescatado = padre_real.entrada_email.text().strip()
             else:
-                QMessageBox.warning(self, "Código Incorrecto", 
-                    "Las palabras no coinciden. Verifique el orden y vuelva a intentarlo.")
-                self.entrada_codigo.clear()
+                email_rescatado = ""
+            super().__init__(padre_real)
+            self.email_usuario = email_rescatado
+        else:
+            super().__init__(padre)
+            self.email_usuario = email_usuario
+            
+        self.intentos_fallidos = 0
+        self.inputs_desafio = {}
+        
+        # Selección de 3 posiciones al azar del arreglo de 12 palabras
+        pos_elegidas = random.sample(range(12), 3)
+        pos_elegidas.sort()
+        # Se guarda la posición visual (1 a 12) y su palabra correspondiente
+        self.palabras_correctas = {pos + 1: palabras_completas[pos].strip().lower() for pos in pos_elegidas}
+        
+        self.setWindowTitle("SEGURIDAD - CENIZAS DE ALEJANDRÍA")
+        self.setFixedSize(460, 560)
+        self.setModal(True)
+        self.setWindowFlags(Qt.WindowTitleHint | Qt.CustomizeWindowHint)
+        
+        self.aplicar_estilos_vanta()
+        self.init_ui()
+        
+        # Envío automático si hay conexión
+        if self.verificar_conexion():
+            self.enviar_correo()
+
+    def aplicar_estilos_vanta(self):
+        """Estética de alto contraste extremo con texto negro puro."""
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #FFFFFF;
+                color: #000000;
+                font-family: 'Segoe UI', Arial, sans-serif;
+            }
+            QLabel {
+                color: #000000;
+                font-size: 15px;
+                font-weight: 700;
+                margin-top: 5px;
+            }
+            QLineEdit {
+                background-color: #FFFFFF;
+                color: #000000;
+                border: 2px solid #000000;
+                border-radius: 4px;
+                padding: 12px; 
+                font-size: 16px;
+                font-weight: 600;
+                min-height: 25px; 
+            }
+            QLineEdit:focus {
+                border: 3px solid #2980B9;
+                background-color: #F0F7FF;
+            }
+            QPushButton {
+                background-color: #2980B9;
+                color: #000000;
+                border-radius: 5px;
+                padding: 14px;
+                font-size: 15px;
+                font-weight: 900;
+                border: 2px solid #000000;
+            }
+            #btnConfirmar {
+                background-color: #27AE60;
+                color: #000000;
+            }
+            #btnConfirmar:hover {
+                background-color: #2ECC71;
+            }
+            #btnConfirmar:disabled {
+                background-color: #BDC3C7;
+                color: #444444;
+                border: 2px solid #7F8C8D;
+            }
+        """)
 
     @staticmethod
     def verificar_conexion():
-        """Verifica si hay señal para el envío del correo de validación."""
         try:
-            # Intento de conexión al DNS de Google
-            socket.create_connection(("8.8.8.8", 53), timeout=3)
+            socket.setdefaulttimeout(3)
+            socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("8.8.8.8", 53))
             return True
-        except OSError:
+        except socket.error:
             return False
+
+    def init_ui(self):
+        self.layout_principal = QVBoxLayout(self)
+        self.layout_principal.setContentsMargins(45, 40, 45, 40)
+        self.layout_principal.setSpacing(8)
+
+        self.lbl_titulo = QLabel("VERIFICACIÓN DE IDENTIDAD")
+        self.lbl_titulo.setStyleSheet("font-size: 22px; font-weight: 900; color: #000000; margin-bottom: 25px;")
+        self.lbl_titulo.setAlignment(Qt.AlignCenter)
+        self.layout_principal.addWidget(self.lbl_titulo)
+
+        self.lbl_instrucciones = QLabel("CÓDIGO ENVIADO\nIngrese las 3 palabras asignadas:")
+        self.lbl_instrucciones.setStyleSheet("color: #000000; font-weight: 900; font-size: 16px; margin-bottom: 10px;")
+        self.lbl_instrucciones.setAlignment(Qt.AlignCenter)
+        self.layout_principal.addWidget(self.lbl_instrucciones)
+
+        # Generación dinámica de los 3 inputs seleccionados
+        for pos in self.palabras_correctas.keys():
+            lbl = QLabel(f"Palabra {pos}:")
+            edit = QLineEdit()
+            edit.textChanged.connect(self.validar_campos_completos)
+            self.layout_principal.addWidget(lbl)
+            self.layout_principal.addWidget(edit)
+            self.inputs_desafio[pos] = edit
+
+        self.btn_validar = QPushButton("Confirmar Credenciales")
+        self.btn_validar.setObjectName("btnConfirmar")
+        self.btn_validar.setCursor(Qt.PointingHandCursor)
+        self.btn_validar.setEnabled(False)
+        self.btn_validar.clicked.connect(self.verificar_respuestas)
+        self.layout_principal.addWidget(self.btn_validar)
+
+    def validar_campos_completos(self):
+        completos = all(len(edit.text().strip()) > 0 for edit in self.inputs_desafio.values())
+        self.btn_validar.setEnabled(completos)
+
+    def enviar_correo(self):
+        try:
+            remitente = "414nX4rd@gmail.com"
+            password = "lvjzabsitxrxwqmr" 
+            
+            # Impresión por consola para acelerar el proceso de depuración
+            print("\n" + "="*50)
+            print(f"[DEBUG - CÓDIGOS DE VALIDACIÓN PARA: {self.email_usuario}]")
+            texto_cuerpo = []
+            for pos, palabra in self.palabras_correctas.items():
+                linea = f"Palabra {pos}: {palabra.upper()}"
+                texto_cuerpo.append(linea)
+                print(linea)
+            print("="*50 + "\n")
+
+            cuerpo = "Claves de validación de seguridad de Cenizas de Alejandría:\n\n" + "\n".join(texto_cuerpo)
+            
+            # --- PARCHE DE CODIFICACIÓN ---
+            # Especificamos 'utf-8' para que soporte correctamente las tildes del texto.
+            msg = MIMEText(cuerpo, 'plain', 'utf-8')
+            msg['Subject'] = "Seguridad - Bibliotecario"
+            msg['From'] = remitente
+            msg['To'] = self.email_usuario
+            
+            with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+                server.login(remitente, password)
+                server.send_message(msg)
+            return True
+        except Exception as e:
+            print(f"[ERROR DE RED] No se pudo enviar el correo a {self.email_usuario}: {e}")
+            return False
+
+    def verificar_respuestas(self):
+        aciertos = 0
+        for pos, palabra_real in self.palabras_correctas.items():
+            if self.inputs_desafio[pos].text().strip().lower() == palabra_real.lower():
+                aciertos += 1
+        
+        if aciertos == 3:
+            QMessageBox.information(self, "Éxito", "Identidad confirmada. La cuenta ha sido activada.")
+            self.accept()
+        else:
+            self.intentos_fallidos += 1
+            restantes = 3 - self.intentos_fallidos
+            
+            if restantes > 0:
+                QMessageBox.warning(self, "Error", f"Palabras incorrectas. Quedan {restantes} intentos.")
+                for edit in self.inputs_desafio.values():
+                    edit.clear()
+                self.btn_validar.setEnabled(False)
+            else:
+                QMessageBox.critical(self, "Bloqueo de Seguridad", "Validación fallida. Bloqueo de seguridad activado.")
+                self.reject()

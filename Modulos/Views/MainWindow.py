@@ -97,10 +97,11 @@ class VentanaPrincipal(QMainWindow):
 
         self.btn_exportar.clicked.connect(self.exportar_datos)
 
-        # Conexión fundamental: Sincronizar botones de guardado con lógica de controladores[cite: 3]
+        # Conexiones Maestras
         self._conectar_guardado_usuarios()
         self._conectar_senales_recarga()
 
+        # Restricciones por Rol
         if self.rol not in ['Bibliotecario', 'admin', 'Director']:
             self.pila_derecha.hide()
             self.btn_params.hide()
@@ -108,7 +109,7 @@ class VentanaPrincipal(QMainWindow):
         self.cambiar_pagina(0)
 
     def _conectar_guardado_usuarios(self):
-        """Desconecta señales previas y asegura que el controlador gestione el flujo[cite: 3]"""
+        """Desconecta señales previas y asegura que el controlador gestione el flujo"""
         try:
             self.ctrl_usuario.vista.btn_guardar.clicked.disconnect()
         except:
@@ -116,13 +117,8 @@ class VentanaPrincipal(QMainWindow):
         self.ctrl_usuario.vista.btn_guardar.clicked.connect(self._handle_guardado_usuario)
 
     def _handle_guardado_usuario(self):
-        """
-        Intermediario de flujo: espera la confirmación del controlador antes de limpiar.
-        Si 'manejar_guardado' retorna True, se procesaron validaciones y diálogos[cite: 2, 3].
-        """
+        """Intermediario: reinicia visibilidad tras éxito en el guardado"""
         resultado = self.ctrl_usuario.manejar_guardado()
-        
-        # Solo procedemos a limpiar la UI si el controlador confirma éxito total[cite: 3]
         if resultado is True:
             self.ctrl_usuario.limpiar_formulario()
             self.ctrl_usuario.reiniciar_visibilidad_formulario()
@@ -132,20 +128,16 @@ class VentanaPrincipal(QMainWindow):
         """Sincronización cruzada entre controladores"""
         if hasattr(self.ctrl_usuario, 'datos_actualizados'):
             self.ctrl_usuario.datos_actualizados.connect(self.recargar_todo)
-
         if hasattr(self.ctrl_libro, 'libro_guardado'):
             self.ctrl_libro.libro_guardado.connect(self.recargar_todo)
-
         if hasattr(self.ctrl_insumo, 'datos_actualizados'):
             self.ctrl_insumo.datos_actualizados.connect(self.recargar_todo)
-
         if hasattr(self.ctrl_param, 'parametro_guardado'):
             self.ctrl_param.parametro_guardado.connect(self.recargar_todo)
 
     def recargar_todo(self):
-        """Actualiza datos en matrices y refresca ComboBoxes de todos los módulos"""
+        """Refresca tablas y combos en todos los módulos"""
         for ctrl in self.controladores:
-            # 1. Recargar Matriz/Tabla
             if hasattr(ctrl, 'cargar_datos'):
                 try: ctrl.cargar_datos()
                 except: pass
@@ -153,7 +145,6 @@ class VentanaPrincipal(QMainWindow):
                 try: ctrl.cargar_datos_tabla()
                 except: pass
 
-            # 2. Refrescar Desplegables
             if hasattr(ctrl, 'cargar_combos'):
                 try: ctrl.cargar_combos()
                 except: pass
@@ -162,15 +153,15 @@ class VentanaPrincipal(QMainWindow):
                 try: ctrl.vista.actualizar_combos(self.ctrl_param)
                 except: pass
 
-        # Repaint de la interfaz activa
         if self.pila_central.currentWidget():
             self.pila_central.currentWidget().update()
         if self.pila_derecha.isVisible() and self.pila_derecha.currentWidget():
             self.pila_derecha.currentWidget().update()
 
     def cambiar_pagina(self, indice):
-        """Cambia de pestaña y destruye formularios abiertos para evitar colisiones[cite: 1]"""
+        """Limpia la UI y asegura que los formularios de usuario se escondan al navegar"""
         for ctrl in self.controladores:
+            # Esta función es la que esconde los campos de edición/creación
             if hasattr(ctrl, 'reiniciar_visibilidad_formulario'):
                 ctrl.reiniciar_visibilidad_formulario()
             elif hasattr(ctrl, 'vista') and hasattr(ctrl.vista, 'limpiar_interfaz'):
@@ -180,8 +171,6 @@ class VentanaPrincipal(QMainWindow):
         self.actualizar_resaltado_menu(indice)
         self.pila_central.setCurrentIndex(indice)
         self.pila_derecha.setCurrentIndex(indice)
-        
-        # Sincronización de combos al cambiar de sección
         self.recargar_todo()
 
     def actualizar_resaltado_menu(self, indice):
@@ -194,19 +183,16 @@ class VentanaPrincipal(QMainWindow):
         if self.rol != 'Bibliotecario':
             QMessageBox.warning(self, "Acceso Denegado", "Solo los bibliotecarios pueden exportar.")
             return
-
         self.recargar_todo()
         datos_para_exportar = {
             "Usuarios": self.ctrl_usuario.model.obtener_todos() if hasattr(self.ctrl_usuario, 'model') else [],
             "Insumos": self.ctrl_insumo.obtener_todos() if hasattr(self.ctrl_insumo, 'obtener_todos') else [],
             "Libros": self.ctrl_libro.obtener_todos() if hasattr(self.ctrl_libro, 'obtener_todos') else [],
         }
-
         ruta_archivo, _ = QFileDialog.getSaveFileName(
             self, "Guardar Exportación", 
             f'Export_Lib_{datetime.now().strftime("%Y%m%d_%H%M")}.xlsx', "Excel (*.xlsx)"
         )
-
         if ruta_archivo:
             try:
                 with pd.ExcelWriter(ruta_archivo, engine='openpyxl') as escritor:
