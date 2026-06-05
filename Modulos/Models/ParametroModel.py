@@ -6,8 +6,8 @@ class ParametroModel:
 
     def _obtener_mapa_param(self, rubro):
         """
-        MAPA MAESTRO: Define la relación entre el rubro de la UI y la BD.
-        Asegúrate de que el ComboBox en la View use exactamente estos nombres.
+        MAPA MAESTRO: Asocia de forma exacta cada rubro de la interfaz de usuario 
+        con su respectiva tabla, columna identificadora (ID) y columna nominal en la BD.
         """
         MAPA = {
             "Tipo Usuario": ("param_tipos_usuario", "id_tipo_usuario", "nombre"),
@@ -19,70 +19,22 @@ class ParametroModel:
         }
         return MAPA.get(rubro, (None, None, None))
 
-    def _propagar_inactivacion(self, rubro, id_param):
-        """Pone en INACTIVA todos los registros que usan este parámetro"""
-        bd = self.conexion.obtener_conexion()
-        cursor = bd.cursor()
-        try:
-            # Sincronización con el rubro "Tipo Usuario"
-            if rubro == "Tipo Usuario":
-                cursor.execute("UPDATE usuarios SET estado_cuenta = 'INACTIVA' WHERE id_tipo_usuario = %s", (id_param,))
-            elif rubro == "Tipo Insumo":
-                cursor.execute("UPDATE insumos SET estado = 'INACTIVA' WHERE id_tipo_insumo = %s", (id_param,))
-            elif rubro in ["Autor", "Editorial", "Categoría", "Género"]:
-                # Lógica simplificada para libros mediante mapeo dinámico si fuera necesario, 
-                # pero mantenemos tus queries específicas por seguridad.
-                if rubro == "Autor":
-                    cursor.execute("UPDATE libros l JOIN libro_autor la ON l.id_libro = la.id_libro SET l.estado = 'INACTIVA' WHERE la.id_autor = %s", (id_param,))
-                elif rubro == "Editorial":
-                    cursor.execute("UPDATE libros l JOIN libro_editorial le ON l.id_libro = le.id_libro SET l.estado = 'INACTIVA' WHERE le.id_editorial = %s", (id_param,))
-                elif rubro == "Categoría":
-                    cursor.execute("UPDATE libros l JOIN libro_categoria lc ON l.id_libro = lc.id_libro SET l.estado = 'INACTIVA' WHERE lc.id_categoria = %s", (id_param,))
-                elif rubro == "Género":
-                    cursor.execute("UPDATE libros l JOIN libro_genero lg ON l.id_libro = lg.id_libro SET l.estado = 'INACTIVA' WHERE lg.id_genero = %s", (id_param,))
-            
-            bd.commit()
-        except Exception as e:
-            bd.rollback()
-            raise e
-        finally:
-            cursor.close()
-
-    def obtener_info_por_nombre(self, rubro, nombre):
-        tabla, col_id, col_nombre = self._obtener_mapa_param(rubro)
-        if not tabla: return None
-        bd = self.conexion.obtener_conexion()
-        cursor = bd.cursor(dictionary=True)
-        try:
-            consulta = f"SELECT {col_id} AS id, {col_nombre} AS nombre, '{rubro}' AS rubro, estado FROM {tabla} WHERE {col_nombre} = %s"
-            cursor.execute(consulta, (nombre,))
-            return cursor.fetchone()
-        finally:
-            cursor.close()
-
-    def obtener_lista_activos(self, rubro):
-        tabla, col_id, col_nombre = self._obtener_mapa_param(rubro)
-        if not tabla: return []
-        bd = self.conexion.obtener_conexion()
-        cursor = bd.cursor(dictionary=True)
-        try:
-            cursor.execute(f"SELECT {col_id} as id, {col_nombre} as nombre FROM {tabla} WHERE estado='ACTIVO'")
-            return cursor.fetchall()
-        finally:
-            cursor.close()
-
     def obtener_todos(self, rubro_filtro="Todos"):
+        """
+        Retorna los registros con ALIAS universales ('id', 'nombre') para evitar KeyErrors.
+        Soporta la carga del panel general mediante un UNION ALL de todas las tablas.
+        """
         bd = self.conexion.obtener_conexion()
         cursor = bd.cursor(dictionary=True)
         
-        # Diccionario de consultas sincronizado con las keys del MAPA
+        # Consultas estandarizadas para que los Controladores siempre lean 'id' y 'nombre'
         consultas = {
-            "Tipo Usuario": "SELECT id_tipo_usuario AS id, nombre, 'Tipo Usuario' AS rubro, estado FROM param_tipos_usuario",
-            "Tipo Insumo": "SELECT id_tipo_insumo AS id, nombre, 'Tipo Insumo' AS rubro, estado FROM param_tipos_insumo",
-            "Autor": "SELECT id_autor AS id, nombre_completo AS nombre, 'Autor' AS rubro, estado FROM param_autores",
-            "Editorial": "SELECT id_editorial AS id, nombre_editorial AS nombre, 'Editorial' AS rubro, estado FROM editoriales",
-            "Categoría": "SELECT id_categoria AS id, nombre_categoria AS nombre, 'Categoría' AS rubro, estado FROM categorias_catalogo",
-            "Género": "SELECT id_genero AS id, nombre_genero AS nombre, 'Género' AS rubro, estado FROM generos"
+            "Tipo Usuario": "SELECT id_tipo_usuario AS id, nombre AS nombre, 'Tipo Usuario' AS rubro, estado, admitido, permisos FROM param_tipos_usuario",
+            "Tipo Insumo": "SELECT id_tipo_insumo AS id, nombre AS nombre, 'Tipo Insumo' AS rubro, estado, NULL AS admitido, NULL AS permisos FROM param_tipos_insumo",
+            "Autor": "SELECT id_autor AS id, nombre_completo AS nombre, 'Autor' AS rubro, estado, NULL AS admitido, NULL AS permisos FROM param_autores",
+            "Editorial": "SELECT id_editorial AS id, nombre_editorial AS nombre, 'Editorial' AS rubro, estado, NULL AS admitido, NULL AS permisos FROM editoriales",
+            "Categoría": "SELECT id_categoria AS id, nombre_categoria AS nombre, 'Categoría' AS rubro, estado, NULL AS admitido, NULL AS permisos FROM categorias_catalogo",
+            "Género": "SELECT id_genero AS id, nombre_genero AS nombre, 'Género' AS rubro, estado, NULL AS admitido, NULL AS permisos FROM generos"
         }
         
         try:
@@ -94,30 +46,119 @@ class ParametroModel:
             else:
                 return []
             return cursor.fetchall()
+        except Exception as e:
+            raise e
         finally:
             cursor.close()
 
-    def guardar(self, rubro, nombre, estado, es_actualizacion, id_param=None):
+    def obtener_lista_activos(self, rubro):
+        """
+        Retorna únicamente los registros 'ACTIVOS'.
+        Aplica los alias 'AS id' y 'AS nombre' para prevenir el KeyError en los QComboBox.
+        """
         tabla, col_id, col_nombre = self._obtener_mapa_param(rubro)
-        
-        if not tabla: 
-            raise ValueError(f"Error Crítico: El rubro '{rubro}' no existe en el mapa del modelo.")
+        if not tabla:
+            return []
+
+        bd = self.conexion.obtener_conexion()
+        cursor = bd.cursor(dictionary=True)
+        try:
+            consulta = f"""
+                SELECT {col_id} AS id, {col_nombre} AS nombre 
+                FROM {tabla} 
+                WHERE estado IN ('ACTIVO', 'ACTIVA')
+                ORDER BY {col_nombre} ASC
+            """
+            cursor.execute(consulta)
+            return cursor.fetchall()
+        except Exception as e:
+            print(f"Error crítico en obtener_lista_activos para {rubro}: {e}")
+            return []
+        finally:
+            cursor.close()
+
+    def obtener_por_id(self, rubro, id_param):
+        """
+        Retorna un único registro filtrado por su ID.
+        """
+        tabla, col_id, _ = self._obtener_mapa_param(rubro)
+        if not tabla:
+            return None
+
+        bd = self.conexion.obtener_conexion()
+        cursor = bd.cursor(dictionary=True)
+        try:
+            consulta = f"SELECT * FROM {tabla} WHERE {col_id} = %s"
+            cursor.execute(consulta, (id_param,))
+            return cursor.fetchone()
+        except Exception as e:
+            raise e
+        finally:
+            cursor.close()
+
+    def obtener_info_por_nombre(self, rubro, nombre):
+        """
+        Busca un registro por su nombre exacto y añade el atributo genérico 'id'.
+        """
+        tabla, col_id, col_nombre = self._obtener_mapa_param(rubro)
+        if not tabla:
+            return None
             
+        bd = self.conexion.obtener_conexion()
+        cursor = bd.cursor(dictionary=True)
+        try:
+            consulta = f"SELECT * FROM {tabla} WHERE {col_nombre} = %s"
+            cursor.execute(consulta, (nombre,))
+            fila = cursor.fetchone()
+            if fila:
+                fila['id'] = fila[col_id] # Inyección genérica preventiva
+            return fila
+        except Exception as e:
+            raise e
+        finally:
+            cursor.close()
+
+    def guardar(self, rubro, nombre, estado='ACTIVO', editar=False, id_param=None, admitido=None, permisos=None):
+        """
+        Maneja la creación y actualización de parámetros integrando los campos JSON.
+        """
+        tabla, col_id, col_nombre = self._obtener_mapa_param(rubro)
+        if not tabla:
+            raise ValueError(f"Rubro '{rubro}' no válido para guardar.")
+
         bd = self.conexion.obtener_conexion()
         cursor = bd.cursor()
         try:
-            if es_actualizacion and id_param is not None:
-                consulta = f"UPDATE {tabla} SET {col_nombre}=%s, estado=%s WHERE {col_id}=%s"
-                cursor.execute(consulta, (nombre, estado, id_param))
+            if editar:
+                if id_param is None:
+                    raise ValueError("Debe proporcionar el ID del parámetro para efectuar la edición.")
+                
+                cursor.execute(f"SELECT {col_id} FROM {tabla} WHERE {col_nombre} = %s AND {col_id} != %s", (nombre, id_param))
+                if cursor.fetchone():
+                    raise Exception(f"El nombre '{nombre}' ya se encuentra registrado en otro elemento de {rubro}.")
+
+                if rubro == "Tipo Usuario":
+                    val_admitido = 1 if admitido else 0
+                    val_permisos = permisos if permisos else "{}"
+                    consulta = f"UPDATE {tabla} SET {col_nombre} = %s, estado = %s, admitido = %s, permisos = %s WHERE {col_id} = %s"
+                    cursor.execute(consulta, (nombre, estado, val_admitido, val_permisos, id_param))
+                else:
+                    consulta = f"UPDATE {tabla} SET {col_nombre} = %s, estado = %s WHERE {col_id} = %s"
+                    cursor.execute(consulta, (nombre, estado, id_param))
             else:
-                # Verificación de duplicados antes de insertar
                 cursor.execute(f"SELECT {col_id} FROM {tabla} WHERE {col_nombre} = %s", (nombre,))
                 if cursor.fetchone():
-                    raise Exception(f"El nombre '{nombre}' ya existe en {rubro}.")
-                
-                consulta = f"INSERT INTO {tabla} ({col_nombre}, estado) VALUES (%s, %s)"
-                cursor.execute(consulta, (nombre, 'ACTIVO'))
-            
+                    raise Exception(f"El nombre '{nombre}' ya existe en el rubro {rubro}.")
+
+                if rubro == "Tipo Usuario":
+                    val_admitido = 1 if admitido else 0
+                    val_permisos = permisos if permisos else "{}"
+                    consulta = f"INSERT INTO {tabla} ({col_nombre}, estado, admitido, permisos) VALUES (%s, %s, %s, %s)"
+                    cursor.execute(consulta, (nombre, 'ACTIVO', val_admitido, val_permisos))
+                else:
+                    consulta = f"INSERT INTO {tabla} ({col_nombre}, estado) VALUES (%s, %s)"
+                    cursor.execute(consulta, (nombre, 'ACTIVO'))
+
             bd.commit()
         except Exception as e:
             bd.rollback()
@@ -126,7 +167,9 @@ class ParametroModel:
             cursor.close()
 
     def inactivar_parametro_y_dependientes(self, rubro, id_param):
-        """Soft-delete con cascade: pone el parámetro en INACTIVO y propaga"""
+        """
+        Soft-delete en cascada que propaga la restricción a registros vinculados.
+        """
         tabla, col_id, _ = self._obtener_mapa_param(rubro)
         if not tabla: 
             raise ValueError(f"Rubro '{rubro}' no válido para inactivación.")
@@ -134,13 +177,46 @@ class ParametroModel:
         bd = self.conexion.obtener_conexion()
         cursor = bd.cursor()
         try:
-            # Actualizar el estado del parámetro a 'INACTIVO' (o 'INACTIVA' según tu estándar de BD)
-            # Nota: Asegúrate si en la BD usas 'INACTIVO' o 'INACTIVA'.
             cursor.execute(f"UPDATE {tabla} SET estado = 'INACTIVO' WHERE {col_id} = %s", (id_param,))
+            self._propagar_inactivacion(cursor, rubro, id_param)
+            bd.commit()
+        except Exception as e:
+            bd.rollback()
+            raise e
+        finally:
+            cursor.close()
+
+    def _propagar_inactivacion(self, cursor, rubro, id_param):
+        if rubro == "Tipo Usuario":
+            cursor.execute("UPDATE usuarios SET estado_cuenta = 'INACTIVA' WHERE id_tipo_usuario = %s", (id_param,))
+        elif rubro == "Tipo Insumo":
+            cursor.execute("UPDATE insumos SET estado = 'INACTIVA' WHERE id_tipo_insumo = %s", (id_param,))
+        elif rubro == "Autor":
+            cursor.execute("UPDATE libros SET estado = 'INACTIVO' WHERE id_libro IN (SELECT id_libro FROM libro_autor WHERE id_autor = %s)", (id_param,))
+        elif rubro == "Editorial":
+            cursor.execute("UPDATE libros SET estado = 'INACTIVO' WHERE id_libro IN (SELECT id_libro FROM libro_editorial WHERE id_editorial = %s)", (id_param,))
+        elif rubro == "Categoría":
+            cursor.execute("UPDATE libros SET estado = 'INACTIVO' WHERE id_libro IN (SELECT id_libro FROM libro_categoria WHERE id_categoria = %s)", (id_param,))
+        elif rubro == "Género":
+            cursor.execute("UPDATE libros SET estado = 'INACTIVO' WHERE id_libro IN (SELECT id_libro FROM libro_genero WHERE id_genero = %s)", (id_param,))
+
+    def eliminar_fisicamente(self, rubro, id_param):
+        """
+        Borrado físico destructivo.
+        """
+        tabla, col_id, _ = self._obtener_mapa_param(rubro)
+        if not tabla:
+            raise ValueError(f"Rubro '{rubro}' no válido para eliminación física.")
+
+        bd = self.conexion.obtener_conexion()
+        cursor = bd.cursor()
+        try:
+            if rubro == "Tipo Usuario":
+                cursor.execute("DELETE FROM usuarios WHERE id_tipo_usuario = %s", (id_param,))
+            elif rubro == "Tipo Insumo":
+                cursor.execute("DELETE FROM insumos WHERE id_tipo_insumo = %s", (id_param,))
             
-            # Propagar a los registros que dependen de este parámetro
-            self._propagar_inactivacion(rubro, id_param)
-            
+            cursor.execute(f"DELETE FROM {tabla} WHERE {col_id} = %s", (id_param,))
             bd.commit()
         except Exception as e:
             bd.rollback()

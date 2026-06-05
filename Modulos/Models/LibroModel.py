@@ -7,6 +7,7 @@ class LibroModel:
 
     def verificar_existencia_runa(self, clave_runa):
         """Verifica si una RUNA ya existe en la tabla de insumos."""
+        self.bd.commit()  # <--- Sincronización cruzada: limpia caché para leer datos frescos en tiempo real
         cursor = self.bd.cursor()
         cursor.execute("SELECT 1 FROM insumos WHERE clave_runa = %s", (clave_runa,))
         existe = cursor.fetchone() is not None
@@ -15,6 +16,7 @@ class LibroModel:
 
     def obtener_todos_libros(self):
         """Recupera la lista completa de libros con su stock y disponibilidad calculada."""
+        self.bd.commit()  # <--- Cruce absoluto: asegura que los conteos de insumos reflejen cambios externos al instante
         cursor = self.bd.cursor(dictionary=True)
         # Eliminamos cualquier referencia a l.stock y usamos el COUNT de insumos
         consulta = """
@@ -25,88 +27,84 @@ class LibroModel:
              FROM libros l
              LEFT JOIN libro_autor la ON l.id_libro = la.id_libro
              LEFT JOIN param_autores a ON la.id_autor = a.id_autor
-             WHERE l.estado = 'ACTIVO' 
-             GROUP BY l.id_libro, l.titulo, l.isbn, l.estado
+             GROUP BY l.id_libro
         """
         cursor.execute(consulta)
         res = cursor.fetchall()
         cursor.close()
         return res
 
-    def obtener_libro_por_isbn(self, isbn):
-        """Obtiene la información detallada de un libro. Se evitan columnas inexistentes."""
-        cursor = self.bd.cursor(dictionary=True)
-        # Especificamos las columnas reales de la tabla libros para evitar el error 1054
-        consulta = """
-             SELECT l.id_libro, l.titulo, l.isbn, l.estado,
-                    (SELECT COUNT(*) FROM insumos i WHERE i.titulo = l.titulo AND i.id_tipo_insumo = 3) AS stock_total,
-                    (SELECT id_autor FROM libro_autor WHERE id_libro = l.id_libro LIMIT 1) AS primer_id_autor,
-                    (SELECT id_editorial FROM libro_editorial WHERE id_libro = l.id_libro LIMIT 1) AS primer_id_editorial,
-                    (SELECT id_categoria FROM libro_categoria WHERE id_libro = l.id_libro LIMIT 1) AS primer_id_categoria,
-                    (SELECT id_genero FROM libro_genero WHERE id_libro = l.id_libro LIMIT 1) AS primer_id_genero
-             FROM libros l
-             WHERE l.isbn = %s
+    def guardar_o_actualizar_libro(self, id_libro, titulo, isbn, estado, titulo_original=None, autor_ids=None, editorial_ids=None, categoria_ids=None, genero_ids=None):
         """
-        cursor.execute(consulta, (isbn,))
-        resultado = cursor.fetchone()
-        cursor.close()
-        return resultado
-
-    def guardar_libro_db(self, datos_libro, es_actualizacion):
-        """Maneja la persistencia del libro y sus relaciones."""
+        Guarda o actualiza un libro y propaga obligatoriamente los cambios de forma cruzada 
+        hacia la tabla general de insumos para mantener la integridad en conjunto.
+        """
         cursor = self.bd.cursor()
         try:
-            titulo = datos_libro['titulo']
-            isbn = datos_libro['isbn']
-            estado = datos_libro['estado']
-            stock_objetivo = datos_libro.get('stock', 0)
-
-            if es_actualizacion:
-                cursor.execute("SELECT id_libro, titulo FROM libros WHERE isbn = %s", (isbn,))
-                fila = cursor.fetchone()
-                if not fila: raise Exception("Libro no encontrado.")
-                id_libro, titulo_anterior = fila
+            if id_libro:
+                # 1. ACTUALIZACIÓN CRUZADA DE TÍTULO: Si el nombre del libro cambió, se propaga a todas sus copias físicas en insumos
+                if titulo_original and titulo_original != titulo:
+                    cursor.execute("""
+                        UPDATE insumos 
+                        SET titulo = %s 
+                        WHERE titulo = %s AND id_tipo_insumo = 3
+                    """, (titulo, titulo_original))
                 
-                cursor.execute("UPDATE libros SET titulo=%s, estado=%s WHERE id_libro=%s", (titulo, estado, id_libro)) 
-                if titulo_anterior != titulo:
-                    cursor.execute("UPDATE insumos SET titulo=%s WHERE titulo=%s AND id_tipo_insumo=3", (titulo, titulo_anterior))
+                # 2. ACTUALIZACIÓN CRUZADA DE ESTADOS: Sincroniza la disponibilidad general del ítem
+                if estado in ('INACTIVO', 'INACTIVA', 'SUSPENDIDA'):
+                    cursor.execute("""
+                        UPDATE insumos 
+                        SET estado = 'INACTIVO' 
+                        WHERE titulo = %s AND id_tipo_insumo = 3
+                    """, (titulo,))
+                elif estado in ('ACTIVO', 'ACTIVA', 'DISPONIBLE'):
+                    cursor.execute("""
+                        UPDATE insumos 
+                        SET estado = 'DISPONIBLE' 
+                        WHERE titulo = %s AND id_tipo_insumo = 3 AND estado = 'INACTIVO'
+                    """, (titulo,))
+
+                # Actualizar entidad raíz del libro
+                cursor.execute("""
+                    UPDATE libros 
+                    SET titulo = %s, isbn = %s, estado = %s 
+                    WHERE id_libro = %s
+                """, (titulo, isbn, estado, id_libro))
             else:
-                cursor.execute("INSERT INTO libros (titulo, isbn, estado) VALUES (%s, %s, 'ACTIVO')", (titulo, isbn))
+                # Insertar libro nuevo
+                cursor.execute("""
+                    INSERT INTO libros (titulo, isbn, estado) 
+                    VALUES (%s, %s, %s)
+                """, (titulo, isbn, estado))
                 id_libro = cursor.lastrowid
 
-            self._actualizar_relaciones(cursor, id_libro, datos_libro)
-
-            # Cálculo de diferencia de stock para el Controlador
-            cursor.execute("SELECT COUNT(*) FROM insumos WHERE titulo=%s AND id_tipo_insumo=3", (titulo,))
-            stock_actual = cursor.fetchone()[0]
-            diferencia = stock_objetivo - stock_actual
+            # 3. Sincronización de tablas intermedias (RBAC / Relacionales) si se especifican arrays de IDs
+            tablas_relacionales = [
+                ('libro_autor', 'id_autor', autor_ids),
+                ('libro_editorial', 'id_editorial', editorial_ids),
+                ('libro_categoria', 'id_categoria', categoria_ids),
+                ('libro_genero', 'id_genero', genero_ids)
+            ]
             
+            for tabla, columna, ids in tablas_relacionales:
+                if ids is not None:
+                    cursor.execute(f"DELETE FROM {tabla} WHERE id_libro = %s", (id_libro,))
+                    for rel_id in ids:
+                        cursor.execute(f"INSERT INTO {tabla} (id_libro, {columna}) VALUES (%s, %s)", (id_libro, rel_id))
+
             self.bd.commit()
-            return id_libro, diferencia
+            return id_libro
         except Exception as e:
             self.bd.rollback()
             raise e
         finally:
             cursor.close()
 
-    def _actualizar_relaciones(self, cursor, id_libro, datos):
-        """Actualiza las tablas intermedias de relaciones."""
-        tablas = {
-            'libro_autor': ('id_autor', datos.get('id_autor')),
-            'libro_editorial': ('id_editorial', datos.get('id_editorial')),
-            'libro_categoria': ('id_categoria', datos.get('id_categoria')),
-            'libro_genero': ('id_genero', datos.get('id_genero'))
-        }
-        for tabla, (columna, valor) in tablas.items():
-            cursor.execute(f"DELETE FROM {tabla} WHERE id_libro=%s", (id_libro,))
-            if valor:
-                cursor.execute(f"INSERT INTO {tabla} (id_libro, {columna}) VALUES (%s, %s)", (id_libro, valor))
-
-    def insertar_insumo_libro(self, titulo, runa):
-        """Inserta una unidad física (insumo) de un libro."""
+    def agregar_unidades_libro_como_insumo(self, titulo, runa):
+        """Registra un libro físico individual en la tabla general de insumos."""
         cursor = self.bd.cursor()
         cursor.execute("""
-            INSERT INTO insumos (titulo, id_tipo_insumo, estado, fecha_adquisicion, clave_runa) 
+            INSERT INTO insumos (titulo, id_tipo_insumo, estado, fecha_adquisicion, clave_runa)
             VALUES (%s, 3, 'DISPONIBLE', CURDATE(), %s)
         """, (titulo, runa))
         self.bd.commit()
@@ -123,21 +121,25 @@ class LibroModel:
         cursor.close()
 
     def eliminar_libro_db(self, isbn):
-        """Elimina el libro y sus dependencias."""
+        """Elimina el libro y sus dependencias de forma destructiva limpia."""
         cursor = self.bd.cursor()
         try:
             cursor.execute("SELECT id_libro, titulo FROM libros WHERE isbn = %s", (isbn,))
             fila = cursor.fetchone()
-            if not fila: raise Exception("Libro no encontrado.")
+            if not fila: 
+                raise Exception("Libro no encontrado.")
             id_libro, titulo = fila
             
+            # Limpieza cruzada de tablas relacionales asociativas
             relaciones = ['libro_autor', 'libro_editorial', 'libro_categoria', 'libro_genero']
             for tabla in relaciones:
                 cursor.execute(f"DELETE FROM {tabla} WHERE id_libro=%s", (id_libro,))
             
+            # Sincronización cruzada: eliminar copias físicas ligadas en insumos
             cursor.execute("DELETE FROM insumos WHERE titulo = %s AND id_tipo_insumo = 3", (titulo,))
-            cursor.execute("DELETE FROM libros WHERE id_libro = %s", (id_libro,))
             
+            # Eliminar registro maestro del libro
+            cursor.execute("DELETE FROM libros WHERE id_libro = %s", (id_libro,))
             self.bd.commit()
         except Exception as e:
             self.bd.rollback()

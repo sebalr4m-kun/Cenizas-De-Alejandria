@@ -27,6 +27,9 @@ class ControladorLibro(QObject):
         """Obtiene la lista de libros con stock calculado para la tabla del catálogo"""
         if not self.vista: return
         try:
+            # Sincronización cruzada: Limpia la transacción para asegurar datos frescos de Insumos
+            self.bd.commit() 
+            
             cursor = self.bd.cursor(dictionary=True)
             consulta = """
                 SELECT l.titulo, l.isbn, 
@@ -56,7 +59,11 @@ class ControladorLibro(QObject):
         para auto-completar el formulario de edición.
         """
         try:
+            # Sincronización cruzada: Limpia la transacción para asegurar datos frescos
+            self.bd.commit() 
+            
             cursor = self.bd.cursor(dictionary=True)
+            # SE CORRIGIÓ EL ERROR TIPOGRÁFICO: id_libro = l.id_libro (antes decía l.id_categoria)
             consulta = """
                  SELECT l.*, 
                         (SELECT COUNT(*) FROM insumos i WHERE i.titulo = l.titulo AND i.id_tipo_insumo = 3) AS stock_total,
@@ -78,6 +85,7 @@ class ControladorLibro(QObject):
     # ==================== GESTIÓN DE RUNAS Y STOCK ====================
 
     def verificar_existencia_runa(self, clave_runa):
+        self.bd.commit()
         cursor = self.bd.cursor()
         try:
             cursor.execute("SELECT 1 FROM insumos WHERE clave_runa = %s", (clave_runa,))

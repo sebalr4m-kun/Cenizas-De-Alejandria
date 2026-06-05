@@ -24,7 +24,7 @@ class ValidadorRecuperacion(QDialog):
         self.palabras_correctas = {} 
         self.expiracion_token = None
         self.metodo_online = False
-        self.intentos_fallidos = 0 # Nuevo contador de seguridad
+        self.intentos_fallidos = 0 # Contador de seguridad
         
         self.aplicar_estilos_vanta()
         self.init_ui()
@@ -98,11 +98,12 @@ class ValidadorRecuperacion(QDialog):
         self.lbl_titulo.setAlignment(Qt.AlignCenter)
         self.layout_principal.addWidget(self.lbl_titulo)
 
-        self.etiqueta_instruccion = QLabel("Correo del Bibliotecario:")
+        # Modificación de texto generalizado para RBAC
+        self.etiqueta_instruccion = QLabel("Correo de la Cuenta Admitida:")
         self.layout_principal.addWidget(self.etiqueta_instruccion)
 
         self.entrada_email = QLineEdit()
-        self.entrada_email.setPlaceholderText("bibliotecario@ejemplo.com")
+        self.entrada_email.setPlaceholderText("usuario@ejemplo.com")
         self.layout_principal.addWidget(self.entrada_email)
 
         self.btn_verificar_mail = QPushButton("Validar Cuenta")
@@ -133,16 +134,17 @@ class ValidadorRecuperacion(QDialog):
 
         cursor = self.bd.cursor(dictionary=True)
         try:
+            # === OPTIMIZACIÓN RBAC: Cambio de 'Bibliotecario' por 'admitido = 1' ===
             query = """
                 SELECT u.id_usuario FROM usuarios u
                 JOIN param_tipos_usuario p ON u.id_tipo_usuario = p.id_tipo_usuario
-                WHERE u.email = %s AND p.nombre = 'Bibliotecario'
+                WHERE u.email = %s AND p.admitido = 1
             """
             cursor.execute(query, (self.email_usuario,))
             usuario = cursor.fetchone()
 
             if not usuario:
-                QMessageBox.critical(self, "Acceso Denegado", "Usuario no autorizado.")
+                QMessageBox.critical(self, "Acceso Denegado", "El correo ingresado no pertenece a una cuenta admitida para este proceso.")
                 self.btn_verificar_mail.setEnabled(True)
                 self.btn_verificar_mail.setText("Validar Cuenta")
                 return
@@ -177,7 +179,7 @@ class ValidadorRecuperacion(QDialog):
         cursor.execute("SELECT indices_palabras FROM seguridad_recuperacion WHERE id_usuario = %s", (self.id_usuario_local,))
         res = cursor.fetchone()
         if not res:
-            QMessageBox.critical(self, "Error", "Sin llaves offline.")
+            QMessageBox.critical(self, "Error", "Sin llaves offline. Contacte a un administrador.")
             self.btn_verificar_mail.setEnabled(True)
             return
 
@@ -195,9 +197,10 @@ class ValidadorRecuperacion(QDialog):
         try:
             remitente = "414nX4rd@gmail.com"
             password = "lvjzabsitxrxwqmr" 
-            cuerpo = f"Palabras: 1. {palabras[0]}, 2. {palabras[1]}, 3. {palabras[2]}"
+            cuerpo = f"Palabras de Recuperación RBAC:\n1. {palabras[0]}\n2. {palabras[1]}\n3. {palabras[2]}"
             msg = MIMEText(cuerpo)
-            msg['Subject'] = "Seguridad - Bibliotecario"
+            # Modificación de texto del asunto para desplazar 'Bibliotecario'
+            msg['Subject'] = "Seguridad de Acceso - Cenizas de Alejandría"
             msg['From'] = remitente
             msg['To'] = self.email_usuario
             with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
@@ -229,7 +232,7 @@ class ValidadorRecuperacion(QDialog):
         self.btn_validar_desafio.setEnabled(completos)
 
     def verificar_respuestas(self):
-        """Verifica respuestas con sistema de 3 intentos[cite: 4]."""
+        """Verifica respuestas con sistema de 3 intentos."""
         if self.metodo_online and datetime.now() > self.expiracion_token:
             QMessageBox.warning(self, "Expirado", "El tiempo ha terminado.")
             self.reject()
@@ -241,7 +244,7 @@ class ValidadorRecuperacion(QDialog):
                 aciertos += 1
         
         if aciertos == 3:
-            QMessageBox.information(self, "Éxito", "Identidad confirmada.")
+            QMessageBox.information(self, "Éxito", "Identidad confirmada. Redirigiendo al sistema...")
             self.accept()
         else:
             self.intentos_fallidos += 1
@@ -249,8 +252,7 @@ class ValidadorRecuperacion(QDialog):
             
             if restantes > 0:
                 QMessageBox.warning(self, "Error", f"Palabras incorrectas. Quedan {restantes} intentos.")
-                # Limpiar campos para reintento[cite: 4]
                 for edit in self.inputs_desafio.values(): edit.clear()
             else:
                 QMessageBox.critical(self, "Bloqueo de Seguridad", "Demasiados intentos fallidos. Volviendo al inicio.")
-                self.reject() # Cierra y vuelve al login[cite: 4]
+                self.reject()

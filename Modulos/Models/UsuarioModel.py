@@ -7,48 +7,66 @@ class UsuarioModel:
         self.bd = Conexion().obtener_conexion()
 
     def obtener_todos(self):
+        self.bd.commit()
         cursor = self.bd.cursor(dictionary=True)
-        consulta = """
-            SELECT u.nombre AS Nombre, u.email AS Email, 
-                   p.nombre AS 'Tipo Cuenta', u.estado_cuenta AS Estado
-            FROM usuarios u 
-            JOIN param_tipos_usuario p ON u.id_tipo_usuario = p.id_tipo_usuario
-            WHERE u.estado_cuenta != 'ELIMINADA'
-        """
-        cursor.execute(consulta)
-        resultado = cursor.fetchall()
-        cursor.close()
-        return resultado
+        try:
+            consulta = """
+                SELECT u.nombre AS Nombre, u.email AS Email, 
+                       p.nombre AS 'Tipo Cuenta', u.estado_cuenta AS Estado
+                FROM usuarios u 
+                JOIN param_tipos_usuario p ON u.id_tipo_usuario = p.id_tipo_usuario
+                WHERE u.estado_cuenta != 'ELIMINADA'
+            """
+            cursor.execute(consulta)
+            return cursor.fetchall()
+        finally:
+            cursor.close()
 
     def obtener_por_email(self, email):
+        self.bd.commit()
         cursor = self.bd.cursor(dictionary=True)
-        cursor.execute("SELECT * FROM usuarios WHERE email = %s", (email,))
-        resultado = cursor.fetchone()
-        cursor.close()
-        return resultado
+        try:
+            cursor.execute("SELECT * FROM usuarios WHERE email = %s", (email,))
+            return cursor.fetchone()
+        finally:
+            cursor.close()
 
     def _obtener_tipos_usuario_bd(self):
+        self.bd.commit()
         cursor = self.bd.cursor(dictionary=True)
-        consulta = "SELECT id_tipo_usuario, nombre FROM param_tipos_usuario WHERE estado = 'ACTIVO'"
-        cursor.execute(consulta)
-        resultado = cursor.fetchall()
-        cursor.close()
-        return resultado
+        try:
+            consulta = "SELECT id_tipo_usuario, nombre FROM param_tipos_usuario WHERE estado = 'ACTIVO'"
+            cursor.execute(consulta)
+            return cursor.fetchall()
+        finally:
+            cursor.close()
+
+    def es_tipo_admitido(self, id_tipo):
+        """
+        Verifica dinámicamente si un id_tipo_usuario pertenece a los tipos ADMItidos.
+        Útil para que el Controlador gestione las alertas visuales y requerimientos de contraseña.
+        """
+        self.bd.commit()
+        cursor = self.bd.cursor()
+        try:
+            cursor.execute("SELECT admitido FROM param_tipos_usuario WHERE id_tipo_usuario = %s", (id_tipo,))
+            res = cursor.fetchone()
+            return bool(res[0]) if res else False
+        finally:
+            cursor.close()
 
     def guardar_bd(self, nombre, email, id_tipo, estado, contrasena, es_actualizacion, forzar_palabras=False):
-        """Guarda o actualiza con hasheo. Devuelve palabras solo si es Bibliotecario y corresponde."""
+        """Guarda o actualiza registros con hashing dinámico y gestión de llaves maestras basada en admisión."""
         cursor = self.bd.cursor()
         palabras_recuperacion = []
         try:
             hashed = PasswordHasher.hash(contrasena) if contrasena else None
 
-            # Obtener nombre del tipo
-            cursor.execute("SELECT nombre FROM param_tipos_usuario WHERE id_tipo_usuario = %s", (id_tipo,))
-            res_tipo = cursor.fetchone()
-            nombre_tipo = res_tipo[0] if res_tipo else ""
+            cursor.execute("SELECT admitido FROM param_tipos_usuario WHERE id_tipo_usuario = %s", (id_tipo,))
+            res_admitido = cursor.fetchone()
+            es_admitido = bool(res_admitido[0]) if res_admitido else False
 
             if es_actualizacion:
-                # UPDATE
                 consulta = "UPDATE usuarios SET nombre=%s, id_tipo_usuario=%s, estado_cuenta=%s"
                 params = [nombre, id_tipo, estado]
                 if hashed:
@@ -58,20 +76,17 @@ class UsuarioModel:
                 params.append(email)
                 cursor.execute(consulta, tuple(params))
 
-                # Obtener id_usuario (una sola vez)
                 cursor.execute("SELECT id_usuario FROM usuarios WHERE email = %s", (email,))
                 res_id = cursor.fetchone()
                 target_id = res_id[0] if res_id else None
             else:
-                # INSERT
                 cursor.execute("""
                     INSERT INTO usuarios (nombre, email, id_tipo_usuario, estado_cuenta, contraseña)
                     VALUES (%s, %s, %s, %s, %s)
                 """, (nombre, email, id_tipo, estado, hashed or ''))
                 target_id = cursor.lastrowid
 
-            # Palabras de recuperación SOLO para Bibliotecario
-            if nombre_tipo == "Bibliotecario" and target_id and (not es_actualizacion or forzar_palabras):
+            if es_admitido and target_id and (not es_actualizacion or forzar_palabras):
                 indices_num = [random.randint(1, 999) for _ in range(12)]
                 indices_txt = ", ".join(map(str, indices_num))
                 for idx in indices_num:
@@ -85,7 +100,6 @@ class UsuarioModel:
 
             self.bd.commit()
             return palabras_recuperacion
-
         except Exception as e:
             self.bd.rollback()
             raise e
