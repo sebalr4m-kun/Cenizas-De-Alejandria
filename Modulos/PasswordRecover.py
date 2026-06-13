@@ -1,6 +1,7 @@
 import random
 import socket
 import smtplib
+import json
 from email.mime.text import MIMEText
 from datetime import datetime, timedelta
 from PySide6.QtWidgets import (
@@ -18,19 +19,18 @@ class ValidadorRecuperacion(QDialog):
         self.setModal(True)
         self.bd = Conexion().obtener_conexion()
         
-        # Variables de control
         self.id_usuario_local = None
         self.email_usuario = None
         self.palabras_correctas = {} 
         self.expiracion_token = None
         self.metodo_online = False
-        self.intentos_fallidos = 0 # Contador de seguridad
+        self.intentos_fallidos = 0 
+        self.pasaporte = None 
         
         self.aplicar_estilos_vanta()
         self.init_ui()
 
     def aplicar_estilos_vanta(self):
-        """Estética de alto contraste extremo con texto negro puro."""
         self.setStyleSheet("""
             QDialog {
                 background-color: #FFFFFF;
@@ -98,7 +98,6 @@ class ValidadorRecuperacion(QDialog):
         self.lbl_titulo.setAlignment(Qt.AlignCenter)
         self.layout_principal.addWidget(self.lbl_titulo)
 
-        # Modificación de texto generalizado para RBAC
         self.etiqueta_instruccion = QLabel("Correo de la Cuenta Admitida:")
         self.layout_principal.addWidget(self.etiqueta_instruccion)
 
@@ -134,7 +133,6 @@ class ValidadorRecuperacion(QDialog):
 
         cursor = self.bd.cursor(dictionary=True)
         try:
-            # === OPTIMIZACIÓN RBAC: Cambio de 'Bibliotecario' por 'admitido = 1' ===
             query = """
                 SELECT u.id_usuario FROM usuarios u
                 JOIN param_tipos_usuario p ON u.id_tipo_usuario = p.id_tipo_usuario
@@ -165,13 +163,27 @@ class ValidadorRecuperacion(QDialog):
             cursor.close()
 
     def generar_desafio_email(self, cursor):
-        cursor.execute("SELECT palabra FROM param_diccionario_seguridad ORDER BY RAND() LIMIT 3")
-        palabras = [row['palabra'] for row in cursor.fetchall()]
-        self.palabras_correctas = {i+1: p for i, p in enumerate(palabras)}
+        cursor.execute("SELECT indices_palabras FROM seguridad_recuperacion WHERE id_usuario = %s", (self.id_usuario_local,))
+        res = cursor.fetchone()
+        if not res:
+            self.generar_desafio_local(cursor)
+            return
+
+        indices = [int(i) for i in res['indices_palabras'].split(",")]
+        pos_elegidas = random.sample(range(12), 3)
+        pos_elegidas.sort()
+
+        palabras_a_enviar = []
+        for pos in pos_elegidas:
+            cursor.execute("SELECT palabra FROM param_diccionario_seguridad WHERE id_palabra = %s", (indices[pos],))
+            palabra = cursor.fetchone()['palabra']
+            self.palabras_correctas[pos + 1] = palabra
+            palabras_a_enviar.append(f"{pos + 1}. {palabra}")
+
         self.expiracion_token = datetime.now() + timedelta(minutes=10)
         
-        if self.enviar_correo(palabras):
-            self.mostrar_interfaz_desafio("CÓDIGO ENVIADO\nIngrese las 3 palabras:")
+        if self.enviar_correo(palabras_a_enviar):
+            self.mostrar_interfaz_desafio("CÓDIGO ENVIADO\nIngrese las posiciones indicadas:")
         else:
             self.generar_desafio_local(cursor)
 
@@ -193,21 +205,23 @@ class ValidadorRecuperacion(QDialog):
 
         self.mostrar_interfaz_desafio("MODO OFFLINE\nConsulte sus llaves físicas:")
 
-    def enviar_correo(self, palabras):
+    def enviar_correo(self, lineas_palabras):
         try:
             remitente = "414nX4rd@gmail.com"
             password = "lvjzabsitxrxwqmr" 
-            cuerpo = f"Palabras de Recuperación RBAC:\n1. {palabras[0]}\n2. {palabras[1]}\n3. {palabras[2]}"
-            msg = MIMEText(cuerpo)
-            # Modificación de texto del asunto para desplazar 'Bibliotecario'
+            cuerpo = "Palabras de Recuperación RBAC:\n" + "\n".join(lineas_palabras)
+            
+            msg = MIMEText(cuerpo, 'plain', 'utf-8')
             msg['Subject'] = "Seguridad de Acceso - Cenizas de Alejandría"
             msg['From'] = remitente
             msg['To'] = self.email_usuario
-            with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+            
+            with smtplib.SMTP_SSL('smtp.gmail.com', 465, local_hostname='localhost') as server:
                 server.login(remitente, password)
                 server.send_message(msg)
             return True
-        except: return False
+        except: 
+            return False
 
     def mostrar_interfaz_desafio(self, mensaje):
         self.entrada_email.hide()
@@ -231,8 +245,43 @@ class ValidadorRecuperacion(QDialog):
         completos = all(len(edit.text().strip()) > 0 for edit in self.inputs_desafio.values())
         self.btn_validar_desafio.setEnabled(completos)
 
+    def construir_pasaporte(self):
+        cursor = self.bd.cursor(dictionary=True)
+        try:
+            query = """
+                SELECT u.id_usuario, u.nombre, p.nombre as rol, p.admitido, p.permisos 
+                FROM usuarios u
+                JOIN param_tipos_usuario p ON u.id_tipo_usuario = p.id_tipo_usuario
+                WHERE u.id_usuario = %s
+            """
+            cursor.execute(query, (self.id_usuario_local,))
+            datos = cursor.fetchone()
+            
+            if datos:
+                permisos_dict = {}
+                if datos['permisos']:
+                    if isinstance(datos['permisos'], str):
+                        try:
+                            permisos_dict = json.loads(datos['permisos'])
+                        except json.JSONDecodeError:
+                            pass
+                    else:
+                        permisos_dict = datos['permisos']
+                        
+                self.pasaporte = {
+                    'id_usuario': datos['id_usuario'],
+                    'nombre': datos['nombre'],
+                    'rol': datos['rol'],
+                    'admitido': bool(datos['admitido']),
+                    'permisos': permisos_dict
+                }
+        except Exception as e:
+            print(f"Error al construir el pasaporte: {e}")
+            self.pasaporte = None
+        finally:
+            cursor.close()
+
     def verificar_respuestas(self):
-        """Verifica respuestas con sistema de 3 intentos."""
         if self.metodo_online and datetime.now() > self.expiracion_token:
             QMessageBox.warning(self, "Expirado", "El tiempo ha terminado.")
             self.reject()
@@ -244,6 +293,7 @@ class ValidadorRecuperacion(QDialog):
                 aciertos += 1
         
         if aciertos == 3:
+            self.construir_pasaporte()
             QMessageBox.information(self, "Éxito", "Identidad confirmada. Redirigiendo al sistema...")
             self.accept()
         else:

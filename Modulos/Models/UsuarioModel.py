@@ -44,7 +44,6 @@ class UsuarioModel:
     def es_tipo_admitido(self, id_tipo):
         """
         Verifica dinámicamente si un id_tipo_usuario pertenece a los tipos ADMItidos.
-        Útil para que el Controlador gestione las alertas visuales y requerimientos de contraseña.
         """
         self.bd.commit()
         cursor = self.bd.cursor()

@@ -19,7 +19,7 @@ ESTILO_SWITCH = """
         border: 2px solid #2980b9;
     }
     QCheckBox::indicator:checked:disabled {
-        background-color: #7f8c8d; /* Gris oscuro para indicar activo pero no editable temporalmente */
+        background-color: #7f8c8d; /**/
         border: 2px solid #576574;
     }
     QCheckBox::indicator:disabled {

@@ -116,3 +116,46 @@ class LoginModel:
             return False
         finally:
             cursor.close()
+
+    def obtener_lista_salvavidas_ddlm(self):
+        """
+        Rastrea y recopila todos los usuarios que fungen como pilares del sistema.
+        Retorna una lista de correos electrónicos de aquellos que evitan que el sistema
+        caiga en el modo Dios De La Máquina.
+        """
+        bd = self.conexion.obtener_conexion()
+        if not bd:
+            return []
+            
+        bd.commit() # Fuerza lectura en tiempo real para evitar discrepancias de caché
+        cursor = bd.cursor(dictionary=True)
+        salvavidas = []
+        try:
+            consulta = """
+                SELECT u.email, p.permisos 
+                FROM usuarios u
+                JOIN param_tipos_usuario p ON u.id_tipo_usuario = p.id_tipo_usuario
+                WHERE u.estado_cuenta = 'ACTIVA' 
+                  AND p.admitido = 1
+            """
+            cursor.execute(consulta)
+            candidatos = cursor.fetchall()
+
+            for candidato in candidatos:
+                try:
+                    perms = json.loads(candidato['permisos']) if candidato['permisos'] else {}
+                except Exception:
+                    continue
+
+                usuarios_ok = self._obtener_mod_seguro(perms, "Usuarios").get("ver", False) and self._obtener_mod_seguro(perms, "Usuarios").get("editar", False)
+                parametros_ok = self._obtener_mod_seguro(perms, "Parametros").get("ver", False) and self._obtener_mod_seguro(perms, "Parametros").get("editar", False)
+
+                if usuarios_ok and parametros_ok:
+                    salvavidas.append(candidato['email'])
+
+            return salvavidas
+        except Exception as e:
+            print(f"[ERROR DDLM] Error en obtener_lista_salvavidas_ddlm: {e}")
+            return []
+        finally:
+            cursor.close()

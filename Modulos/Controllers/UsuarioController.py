@@ -24,6 +24,8 @@ class ControladorUsuario(QObject):
         
         self.es_upgrade_a_admitido = False
         self._backup_usuario = None
+        self.sesion_actual = None
+        self.email_loggeado = None
         self.conectar_senales()
 
     def conectar_senales(self):
@@ -37,6 +39,46 @@ class ControladorUsuario(QObject):
         v.entrada_busqueda.textChanged.connect(self.filtrar_tabla)
         v.entrada_email.editingFinished.connect(self.al_terminar_edicion_email)
         v.entrada_pass_actual.textChanged.connect(self.verificar_pass_tiempo_real)
+
+    def establecer_sesion_actual(self, pasaporte):
+        """
+        Recibe el pasaporte de la sesión actual y extrae el email del usuario loggeado
+        para poder imponer bloqueos estrictos de auto-edición de privilegios.
+        """
+        self.sesion_actual = pasaporte
+        self.email_loggeado = None
+
+        if self.sesion_actual and self.sesion_actual.get('id_usuario'):
+            bd = self.model.bd
+            bd.commit()
+            cursor = bd.cursor()
+            try:
+                # Buscamos el email oficial que corresponde al ID de la sesión actual
+                cursor.execute("SELECT email FROM usuarios WHERE id_usuario = %s", (self.sesion_actual['id_usuario'],))
+                res = cursor.fetchone()
+                if res:
+                    self.email_loggeado = res[0]
+            except Exception as e:
+                print(f"[ERROR SEGURIDAD] No se pudo resolver el email de la sesión activa: {e}")
+            finally:
+                cursor.close()
+
+    def evaluar_bloqueo_autoedicion_rol(self):
+        """
+        Evalúa visualmente si el usuario cargado en el formulario es el mismo
+        que está operando el sistema. De ser así, bloquea el selector de tipo de cuenta.
+        """
+        if self.modo == 'editar':
+            email_en_edicion = self.vista.entrada_email.text().strip()
+            if self.email_loggeado and self.email_loggeado == email_en_edicion:
+                self.vista.combo_tipo_cuenta.setEnabled(False)
+                self.vista.combo_tipo_cuenta.setToolTip("Bloqueo de Seguridad: No tienes permitido cambiar tu propio rol. Esta acción requiere otro administrador loggeado.")
+            else:
+                self.vista.combo_tipo_cuenta.setEnabled(True)
+                self.vista.combo_tipo_cuenta.setToolTip("")
+        else:
+            self.vista.combo_tipo_cuenta.setEnabled(True)
+            self.vista.combo_tipo_cuenta.setToolTip("")
 
     # =========================================================================
     # PUENTE DE RETROCOMPATIBILIDAD CON VISTA ACTUAL
@@ -138,6 +180,7 @@ class ControladorUsuario(QObject):
         self._backup_usuario = None
         self.vista._recovery_exitoso = False
         self.vista.ajustar_visibilidad_campos_seguridad()
+        self.evaluar_bloqueo_autoedicion_rol()
 
     def cargar_datos(self):
         datos = self.model.obtener_todos()
@@ -205,6 +248,8 @@ class ControladorUsuario(QObject):
             self.verificar_pass_tiempo_real(self.vista.entrada_pass_actual.text())
         else:
             self.solicitar_notificacion.emit('warn', "No encontrado", "Usuario no registrado.", None)
+            
+        self.evaluar_bloqueo_autoedicion_rol()
 
     def validar_identidad_finalizada(self, exito, email=None):
         if exito:
@@ -225,10 +270,48 @@ class ControladorUsuario(QObject):
 
     def manejar_guardado(self):
         nombre = self.vista.entrada_nombre.text().strip()
-        email = self.vista.entrada_email.text().strip()
+        email_en_edicion = self.vista.entrada_email.text().strip()
+        email = email_en_edicion
         id_tipo = self.vista.combo_tipo_cuenta.currentData()
         nueva_pwd = self.vista.entrada_pass_nueva.text().strip()
         pass_actual = self.vista.entrada_pass_actual.text().strip()
+        nuevo_estado = self.vista.combo_estado_cuenta.currentText()
+        nuevo_rol_id = id_tipo
+
+        # --- BARRERA INFRANQUEABLE 1: BLOQUEO DE AUTO-EDICIÓN DE ROL ---
+        if self.modo == 'editar' and self.email_loggeado and self.email_loggeado == email_en_edicion:
+            usuario_bd = self.model.obtener_por_email(email_en_edicion)
+            if usuario_bd and usuario_bd.get('id_tipo_usuario') != nuevo_rol_id:
+                self.solicitar_notificacion.emit(
+                    'warn',
+                    "Alteración de Privilegios Denegada",
+                    "El sistema de seguridad prohíbe estrictamente que un usuario modifique su propio nivel de acceso o tipo de cuenta. Esta acción requiere la intervención de otro usuario con privilegios iguales o mayores desde una sesión completamente independiente.",
+                    None
+                )
+                return False
+
+        # --- BARRERA INFRANQUEABLE 2: PREVENCIÓN DIOS DE LA MÁQUINA (DDLM) ---
+        if self.modo == 'editar' and nuevo_estado in ['SUSPENDIDA', 'ELIMINADA']:
+            try:
+                # Instanciamos el modelo de login para acceder a las verificaciones globales
+                from Modulos.Models.InicioSesionModel import LoginModel
+            except ImportError:
+                from Modulos.Models.InicioSesionModel import LoginModel
+            
+            lm = LoginModel()
+            lista_salvavidas = getattr(lm, 'obtener_lista_salvavidas_ddlm', lambda: [])()
+
+            # Evaluación SI Y SÓLO SI el usuario es un salvavidas y es el ÚNICO restante
+            if email_en_edicion in lista_salvavidas and len(lista_salvavidas) == 1:
+                self.solicitar_notificacion.emit(
+                    'crit',
+                    "Bloqueo del Sistema DDLM Activado",
+                    "Acción cancelada. Esta cuenta es actualmente el ÚNICO pilar estructural que previene que el sistema caiga en el modo Dios De La Máquina. No puedes suspender ni eliminar esta cuenta de usuario hasta que exista, al menos, una cuenta activa adicional con un tipo de usuario que posea los mismos o más permisos de acceso requeridos para mantener el sistema a flote.",
+                    None
+                )
+                # Revertimos visualmente y de inmediato el componente a un estado seguro
+                self.vista.combo_estado_cuenta.setCurrentText("ACTIVA")
+                return False
 
         if not nombre or not email:
             self.solicitar_notificacion.emit('warn', "Datos Faltantes", "Nombre y Email son campos obligatorios.", None)
@@ -303,7 +386,7 @@ class ControladorUsuario(QObject):
                 msg = f"Usuario '{nombre}' creado en modo offline."
             
             else:
-                estado = self.vista.combo_estado_cuenta.currentText()
+                estado = nuevo_estado
                 if estado == "SUSPENDIDA":
                     self.model.eliminar_logico(email)
                     msg = "La cuenta ha sido suspendida."

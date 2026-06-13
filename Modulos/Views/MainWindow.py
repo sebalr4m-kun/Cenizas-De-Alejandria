@@ -39,6 +39,10 @@ class VentanaPrincipal(QMainWindow):
         # Controladores
         self.ctrl_param = ControladorParametro()
         self.ctrl_usuario = ControladorUsuario()
+        
+        # INYECCIÓN DE SESIÓN: Transferimos el pasaporte de seguridad al controlador
+        self.ctrl_usuario.establecer_sesion_actual(self.pasaporte)
+
         self.ctrl_insumo = ControladorInsumo()
         self.ctrl_libro = ControladorLibro()
         self.ctrl_prestamo = ControladorPrestamo()

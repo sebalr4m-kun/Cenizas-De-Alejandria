@@ -15,12 +15,8 @@ class ValidadorCuenta(QDialog):
     solicitando únicamente 3 palabras al azar y asistiendo en el debugging.
     """
     def __init__(self, palabras_completas, email_usuario, padre=None):
-        # --- PARCHE DE RESCATE ---
-        # Detecta si 'email_usuario' recibió erróneamente el objeto visual (VistaUsuario)
-        # desde UsuarioViews.py en lugar de la cadena de texto del correo.
         if not isinstance(email_usuario, str):
             padre_real = email_usuario
-            # Rescatamos el string del email leyendo directamente la caja de texto de la vista
             if hasattr(padre_real, 'entrada_email'):
                 email_rescatado = padre_real.entrada_email.text().strip()
             else:
@@ -34,10 +30,8 @@ class ValidadorCuenta(QDialog):
         self.intentos_fallidos = 0
         self.inputs_desafio = {}
         
-        # Selección de 3 posiciones al azar del arreglo de 12 palabras
         pos_elegidas = random.sample(range(12), 3)
         pos_elegidas.sort()
-        # Se guarda la posición visual (1 a 12) y su palabra correspondiente
         self.palabras_correctas = {pos + 1: palabras_completas[pos].strip().lower() for pos in pos_elegidas}
         
         self.setWindowTitle("SEGURIDAD - CENIZAS DE ALEJANDRÍA")
@@ -48,12 +42,10 @@ class ValidadorCuenta(QDialog):
         self.aplicar_estilos_vanta()
         self.init_ui()
         
-        # Envío automático si hay conexión
         if self.verificar_conexion():
             self.enviar_correo()
 
     def aplicar_estilos_vanta(self):
-        """Estética de alto contraste extremo con texto negro puro."""
         self.setStyleSheet("""
             QDialog {
                 background-color: #FFFFFF;
@@ -127,7 +119,6 @@ class ValidadorCuenta(QDialog):
         self.lbl_instrucciones.setAlignment(Qt.AlignCenter)
         self.layout_principal.addWidget(self.lbl_instrucciones)
 
-        # Generación dinámica de los 3 inputs seleccionados
         for pos in self.palabras_correctas.keys():
             lbl = QLabel(f"Palabra {pos}:")
             edit = QLineEdit()
@@ -152,7 +143,6 @@ class ValidadorCuenta(QDialog):
             remitente = "414nX4rd@gmail.com"
             password = "lvjzabsitxrxwqmr" 
             
-            # Impresión por consola para acelerar el proceso de depuración
             print("\n" + "="*50)
             print(f"[DEBUG - CÓDIGOS DE VALIDACIÓN PARA: {self.email_usuario}]")
             texto_cuerpo = []
@@ -164,14 +154,13 @@ class ValidadorCuenta(QDialog):
 
             cuerpo = "Claves de validación de seguridad de Cenizas de Alejandría:\n\n" + "\n".join(texto_cuerpo)
             
-            # --- PARCHE DE CODIFICACIÓN ---
-            # Especificamos 'utf-8' para que soporte correctamente las tildes del texto.
             msg = MIMEText(cuerpo, 'plain', 'utf-8')
             msg['Subject'] = "Seguridad - Bibliotecario"
             msg['From'] = remitente
             msg['To'] = self.email_usuario
             
-            with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
+            # BLINDAJE: local_hostname='localhost' anula la lectura del nombre de la computadora y evita el error ASCII
+            with smtplib.SMTP_SSL('smtp.gmail.com', 465, local_hostname='localhost') as server:
                 server.login(remitente, password)
                 server.send_message(msg)
             return True
