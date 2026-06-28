@@ -1,0 +1,92 @@
+/* Views/Styles/admin.css */
+
+/* Ajuste del cuerpo cuando el administrador se conecta */
+body.admin-mode {
+    padding-top: 50px;
+    transition: padding 0.4s ease;
+}
+
+/* Barra Superior Premium - Estilo Cenizas de Alejandría */
+.top-admin-bar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 50px;
+    background-color: #1e1e24; /* Carbón oscuro */
+    color: #ffffff;
+    display: flex;
+    align-items: center;
+    padding: 0 25px;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    font-size: 14px;
+    z-index: 9999;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+    box-sizing: border-box;
+    border-bottom: 2px solid #c0392b; /* Detalle Rojo Fuego */
+}
+
+.top-admin-bar strong {
+    color: #ff7675; /* Resalte de usuario en fuego claro */
+    margin-left: 5px;
+}
+
+/* Panel Deslizante de Administración */
+.admin-panel {
+    position: fixed;
+    top: 100vh; /* Escondido abajo por defecto */
+    left: 0;
+    width: 100%;
+    height: calc(100vh - 50px);
+    background-color: #ffffff;
+    z-index: 9998;
+    transition: top 0.5s cubic-bezier(0.1, 0.76, 0.55, 0.94);
+    box-shadow: 0 -5px 25px rgba(0, 0, 0, 0.2);
+    box-sizing: border-box;
+}
+
+/* Cuando se despliega se acopla milimétricamente bajo la barra superior */
+.admin-panel.open {
+    top: 50px;
+}
+
+/* Lengüeta de Acople de Doble Pieza */
+.admin-tongue {
+    position: absolute;
+    top: -40px;
+    left: 50%;
+    transform: translateX(-50%);
+    background-color: #1e1e24; /* Color idéntico a la barra para fundirse */
+    color: #ffffff;
+    height: 40px;
+    padding: 0 35px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px 8px 0 0;
+    cursor: pointer;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    font-size: 14px;
+    font-weight: bold;
+    box-shadow: 0 -4px 10px rgba(0, 0, 0, 0.15);
+    user-select: none;
+    transition: background-color 0.2s, border-top 0.2s;
+    border-top: 2px solid #c0392b; /* Borde rojo sincronizado */
+}
+
+.admin-tongue:hover {
+    background-color: #2d2d35;
+    color: #ff7675;
+}
+
+/* Contenedor del espacio de trabajo interno */
+.admin-content {
+    padding: 40px;
+    font-family: 'Segoe UI', Arial, sans-serif;
+    color: #1e1e24;
+}
+
+.admin-content h2 {
+    color: #c0392b; /* Encabezado en rojo fuego corporativo */
+    margin-top: 0;
+}
