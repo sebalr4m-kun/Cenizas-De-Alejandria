@@ -16,7 +16,19 @@ class InicioSesionModel {
         }
 
         try {
-            $query = "SELECT id_usuario, contraseña AS contrasena, estado_cuenta FROM usuarios WHERE email = :email LIMIT 1";
+            $query = "SELECT 
+                        u.id_usuario, 
+                        u.nombre, 
+                        u.contraseña AS contrasena, 
+                        u.estado_cuenta,
+                        p.nombre AS rol,
+                        p.admitido,
+                        p.permisos
+                      FROM usuarios u
+                      INNER JOIN param_tipos_usuario p ON u.id_tipo_usuario = p.id_tipo_usuario
+                      WHERE u.email = :email 
+                      LIMIT 1";
+                      
             $stmt = $this->db->prepare($query);
             $stmt->bindParam(":email", $email);
             $stmt->execute();

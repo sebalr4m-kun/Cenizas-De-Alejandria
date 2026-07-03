@@ -15,7 +15,6 @@ class ConexionBD {
                     $this->username,
                     $this->password
                 );
-                // Le decimos a PDO que lance excepciones si algo falla en el SQL
                 $this->conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
             } catch (PDOException $exception) {
                 $this->conn = null;

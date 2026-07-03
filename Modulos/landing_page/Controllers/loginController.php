@@ -3,6 +3,31 @@
 header("Content-Type: application/json");
 require_once __DIR__ . '/../Models/loginModel.php';
 
+function obtenerModuloSeguro($perms, $claveIdeal) {
+    if (empty($perms) || !is_array($perms)) {
+        return [];
+    }
+    
+    // 1. Intento rápido: Coincidencia exacta
+    if (isset($perms[$claveIdeal])) {
+        return $perms[$claveIdeal];
+    }
+    
+    $claveNorm = strtolower($claveIdeal);
+    $claveNorm = str_replace(['á', 'é', 'í', 'ó', 'ú'], ['a', 'e', 'i', 'o', 'u'], $claveNorm);
+    
+    foreach ($perms as $k => $v) {
+        $kNorm = strtolower($k);
+        $kNorm = str_replace(['á', 'é', 'í', 'ó', 'ú'], ['a', 'e', 'i', 'o', 'u'], $kNorm);
+        
+        if ($kNorm === $claveNorm) {
+            return $v;
+        }
+    }
+    
+    return [];
+}
+
 $data = json_decode(file_get_contents("php://input"));
 
 if (!empty($data->email) && !empty($data->password)) {
@@ -15,7 +40,6 @@ if (!empty($data->email) && !empty($data->password)) {
         
         if (password_verify($data->password, $hash)) {
             
-            // Decodificación segura del árbol de permisos JSON
             $permisosRaw = $usuario['permisos'] ?? '';
             $permisos = [];
             
@@ -26,20 +50,13 @@ if (!empty($data->email) && !empty($data->password)) {
             if (!is_array($permisos)) {
                 $permisos = [];
             }
-            $nodoUsuarios = $permisos['Usuarios'] ?? $permisos['usuarios'] ?? null;
             
-            // Intentamos atrapar el nodo de Parámetros tolerando acentos y variaciones de caja
-            $nodoParametros = $permisos['Parametros'] ?? $permisos['parametros'] ?? 
-                              $permisos['Parámetros'] ?? $permisos['parámetros'] ?? null;
-            
-            // Validación interna de permisos (Lectura y Escritura obligatorios)
-            $usuarios_ok = isset($nodoUsuarios['ver']) && filter_var($nodoUsuarios['ver'], FILTER_VALIDATE_BOOLEAN) && 
-                           isset($nodoUsuarios['editar']) && filter_var($nodoUsuarios['editar'], FILTER_VALIDATE_BOOLEAN);
-                           
-            $parametros_ok = isset($nodoParametros['ver']) && filter_var($nodoParametros['ver'], FILTER_VALIDATE_BOOLEAN) && 
-                             isset($nodoParametros['editar']) && filter_var($nodoParametros['editar'], FILTER_VALIDATE_BOOLEAN);
-            
-            // Validación de estado de cuenta y admisión del rol federado
+            $moduloUsuarios = obtenerModuloSeguro($permisos, "Usuarios");
+            $moduloParametros = obtenerModuloSeguro($permisos, "Parametros");
+            $usuarios_ok = isset($moduloUsuarios['ver']) && filter_var($moduloUsuarios['ver'], FILTER_VALIDATE_BOOLEAN) && 
+                           isset($moduloUsuarios['editar']) && filter_var($moduloUsuarios['editar'], FILTER_VALIDATE_BOOLEAN);
+            $parametros_ok = isset($moduloParametros['ver']) && filter_var($moduloParametros['ver'], FILTER_VALIDATE_BOOLEAN) && 
+                             isset($moduloParametros['editar']) && filter_var($moduloParametros['editar'], FILTER_VALIDATE_BOOLEAN);
             $es_admitido = isset($usuario['admitido']) && filter_var($usuario['admitido'], FILTER_VALIDATE_BOOLEAN);
             $es_activa = isset($usuario['estado_cuenta']) && (strtoupper($usuario['estado_cuenta']) === 'ACTIVA');
             
@@ -47,7 +64,9 @@ if (!empty($data->email) && !empty($data->password)) {
                 echo json_encode([
                     "status" => "success", 
                     "message" => "Acceso concedido.",
-                    "nombre" => $usuario['nombre'] ?? 'Administrador'
+                    "nombre" => $usuario['nombre'] ?? 'Administrador',
+                    "rol" => $usuario['rol'] ?? 'Sin Rol',
+                    "permisos" => $permisos
                 ]);
                 exit();
             } else {
