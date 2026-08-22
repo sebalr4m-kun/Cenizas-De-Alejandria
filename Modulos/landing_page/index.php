@@ -8,8 +8,11 @@
 </head>
 <body>
     <div id="app"></div>
-    
     <script src="Models/contentModel.js"></script>
-    <script src="Views/mainViews.js"></script>      <script src="Controllers/mainController.js"></script>
+    <script src="Views/mainViews.js"></script>      
+    <script src="Views/loginDeveloperViews.js"></script>
+    <script src="Views/adminDashboardViews.js"></script>
+    <script src="Controllers/mainController.js"></script>
+    <script src="Controllers/heartbeat.js"></script>
 </body>
 </html>

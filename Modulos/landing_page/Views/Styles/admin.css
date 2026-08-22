@@ -1,62 +1,54 @@
 /* Views/Styles/admin.css */
 
+/* =========================================================================
+   🚀 AJUSTES BASE GENERALES
+   ========================================================================= */
+
 /* Ajuste del cuerpo cuando el administrador se conecta */
 body.admin-mode {
-    padding-top: 50px;
+    padding-top: 0px !important; /* Liberamos los 50px de la barra eliminada */
     transition: padding 0.4s ease;
 }
 
-/* Barra Superior Premium - Estilo Cenizas de Alejandría */
+/* 🗑️ BARRA SUPERIOR ELIMINADA: Oculta de forma segura para evitar conflictos de renderizado */
 .top-admin-bar {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 50px;
-    background-color: #1e1e24; /* Carbón oscuro */
-    color: #ffffff;
-    display: flex;
-    align-items: center;
-    padding: 0 25px;
-    font-family: 'Segoe UI', Arial, sans-serif;
-    font-size: 14px;
-    z-index: 9999;
-    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
-    box-sizing: border-box;
-    border-bottom: 2px solid #c0392b; /* Detalle Rojo Fuego */
+    display: none !important;
 }
 
-.top-admin-bar strong {
-    color: #ff7675; /* Resalte de usuario en fuego claro */
-    margin-left: 5px;
-}
+/* =========================================================================
+   🎛️ PANEL DESLIZANTE VERTICAL (De abajo hacia arriba)
+   ========================================================================= */
 
-/* Panel Deslizante de Administración */
 .admin-panel {
     position: fixed;
     top: 100vh; /* Escondido abajo por defecto */
     left: 0;
     width: 100%;
-    height: calc(100vh - 50px);
-    background-color: #ffffff;
+    height: 100vh; /* Ahora aprovecha el 100% del viewport real */
+    background-color: #0f0f12 !important; /* Forzamos el color oscuro principal contra fondos heredados */
     z-index: 9998;
     transition: top 0.5s cubic-bezier(0.1, 0.76, 0.55, 0.94);
-    box-shadow: 0 -5px 25px rgba(0, 0, 0, 0.2);
+    box-shadow: 0 -5px 25px rgba(0, 0, 0, 0.4);
     box-sizing: border-box;
+    border-top: 2px solid #c0392b; /* El detalle rojo fuego ahora corona el panel */
 }
 
-/* Cuando se despliega se acopla milimétricamente bajo la barra superior */
+/* Cuando se despliega se acopla milimétricamente al borde superior absoluto */
 .admin-panel.open {
-    top: 50px;
+    top: 0px; /* Sube hasta ocupar toda la pantalla */
+    z-index: 10001; /* Elevamos el panel abierto para asegurar visibilidad total */
 }
 
-/* Lengüeta de Acople de Doble Pieza */
+/* =========================================================================
+   👅 LENGÜETA DE ACOPLE INTERACTIVA
+   ========================================================================= */
+
 .admin-tongue {
     position: absolute;
-    top: -40px;
+    top: -40px; /* Posición exacta para asomar en el borde inferior cuando está cerrado */
     left: 50%;
     transform: translateX(-50%);
-    background-color: #1e1e24; /* Color idéntico a la barra para fundirse */
+    background-color: #1e1e24; /* Carbón oscuro premium */
     color: #ffffff;
     height: 40px;
     padding: 0 35px;
@@ -68,10 +60,19 @@ body.admin-mode {
     font-family: 'Segoe UI', Arial, sans-serif;
     font-size: 14px;
     font-weight: bold;
-    box-shadow: 0 -4px 10px rgba(0, 0, 0, 0.15);
+    box-shadow: 0 -4px 10px rgba(0, 0, 0, 0.3);
     user-select: none;
-    transition: background-color 0.2s, border-top 0.2s;
+    transition: background-color 0.2s, top 0.2s, border-radius 0.2s;
     border-top: 2px solid #c0392b; /* Borde rojo sincronizado */
+}
+
+/* Comportamiento de la lengüeta cuando el panel está completamente desplegado */
+.admin-panel.open .admin-tongue {
+    top: 0; /* Se alinea de forma limpia al ras del techo del viewport */
+    border-radius: 0 0 8px 8px;
+    border-top: none;
+    border-bottom: 2px solid #c0392b;
+    z-index: 10002;
 }
 
 .admin-tongue:hover {
@@ -83,10 +84,94 @@ body.admin-mode {
 .admin-content {
     padding: 40px;
     font-family: 'Segoe UI', Arial, sans-serif;
-    color: #1e1e24;
+    color: #f3f4f6; /* Texto claro para contraste premium */
 }
 
 .admin-content h2 {
     color: #c0392b; /* Encabezado en rojo fuego corporativo */
     margin-top: 0;
+}
+
+/* =========================================================================
+   🔄 EFECTO MARQUESINA: TEXT TICKER ROTATOR (Para nombres y roles extra largos)
+   ========================================================================= */
+
+.ticker-container {
+    width: 100%;
+    overflow: hidden;
+    white-space: nowrap;
+    position: relative;
+    background: rgba(0, 0, 0, 0.2);
+    padding: 6px 10px;
+    border-radius: 4px;
+    box-sizing: border-box;
+    margin-top: 4px;
+    border-left: 2px solid #c0392b;
+}
+
+.ticker-text {
+    display: inline-block;
+    padding-left: 100%; /* Inicia el desfile justo fuera del cuadro visible */
+    animation: tickerLoop 14s linear infinite;
+}
+
+/* Animación continua en bucle infinito */
+@keyframes tickerLoop {
+    0% { transform: translate3d(0, 0, 0); }
+    100% { transform: translate3d(-100%, 0, 0); }
+}
+
+.panel-admin-name {
+    color: #ffffff;
+    font-size: 14px;
+    font-weight: bold;
+}
+
+.panel-admin-role {
+    color: #ff7675;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+}
+
+/* =========================================================================
+   🎛️ BARRAS DE DESPLAZAMIENTO ESCALABLES (Scrollbars)
+   ========================================================================= */
+
+/* Estilización global del scrollbar interno del Panel de Administración */
+.admin-panel::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+.admin-panel::-webkit-scrollbar-track {
+    background: #0f0f12;
+}
+
+.admin-panel::-webkit-scrollbar-thumb {
+    background: #c0392b;
+    border-radius: 4px;
+}
+
+.admin-panel::-webkit-scrollbar-thumb:hover {
+    background: #a93226;
+}
+
+/* Personalización del contenedor interno de la Matriz de Accesos */
+.admin-identity-card div::-webkit-scrollbar {
+    width: 5px; /* Scrollbar sutil y delgado para no invadir la tarjeta */
+}
+
+.admin-identity-card div::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: 3px;
+}
+
+.admin-identity-card div::-webkit-scrollbar-thumb {
+    background: #c0392b; /* Rojo pasional característico */
+    border-radius: 3px;
+}
+
+.admin-identity-card div::-webkit-scrollbar-thumb:hover {
+    background: #a93226;
 }

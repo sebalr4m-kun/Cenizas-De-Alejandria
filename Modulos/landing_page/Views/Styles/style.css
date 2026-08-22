@@ -440,29 +440,29 @@ section h3 {
     100% { opacity: 0.6; }
 }
 
-/* Estilo de la Tostada de Error */
+/* Estilo de la Tostada de Error Modificada 🍞 */
 .toast-error {
     visibility: hidden;
     min-width: 280px;
     background-color: #a72626;
     color: #ffffff;
-    text-align: center;
+    text-align: left;
     border-radius: 6px;
     padding: 14px;
     position: fixed;
     z-index: 9999;
-    left: 50%;
+    right: -350px; /* Completamente escondida a la derecha */
     bottom: 30px;
-    transform: translateX(-50%);
     font-size: 0.9rem;
     box-shadow: 0 4px 15px rgba(0,0,0,0.5);
     border: 1px solid rgba(255,255,255,0.1);
-    transition: visibility 0s, opacity 0.4s ease-in-out;
+    transition: right 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.4s ease-in-out;
     opacity: 0;
 }
 
 .toast-error.show {
     visibility: visible;
+    right: 30px; /* Se despliega superpuesta limpiamente desde el lateral */
     opacity: 1;
 }
 

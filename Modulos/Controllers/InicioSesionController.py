@@ -32,11 +32,18 @@ class ControladorLogin:
         }
 
     def ejecutar(self):
-        if not self.model.hay_dios_de_la_maquina_activo():
+        estado_ddlm = self.model.hay_dios_de_la_maquina_activo()
+        
+        if estado_ddlm is None:
+            QMessageBox.critical(None, "Error de Conexión", "No se detecta conexión a la base de datos. Encienda MySQL e intente nuevamente.")
+            return False
+            
+        # Validación original del Modo de Rescate
+        if not estado_ddlm:
             QMessageBox.information(
                 None, 
                 "Modo de Rescate / Configuración", 
-                "No se detectaron usuarios ADMItidos con privilegios de gestión (Dios de la Máquina).\n\nSe ha activado el Modo Administrador con acceso total por seguridad."
+                "No se detectaron usuarios ADMItidos con privilegios de gestión (Dios de la Máquina).\\n\\nSe ha activado el Modo Administrador con acceso total por seguridad."
             )
             self.pasaporte = self._generar_pasaporte_omnipotente()
             self.autenticado = True

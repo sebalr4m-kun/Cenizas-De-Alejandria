@@ -80,7 +80,7 @@ class LoginModel:
         """
         bd = self.conexion.obtener_conexion()
         if not bd:
-            return False
+            return None
             
         bd.commit() # Evita falsos negativos en el arranque del sistema
         cursor = bd.cursor(dictionary=True)
