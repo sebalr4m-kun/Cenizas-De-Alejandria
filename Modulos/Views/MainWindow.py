@@ -17,6 +17,10 @@ from Modulos.Controllers.PrestamoController import ControladorPrestamo
 from Modulos.Controllers.ParametroController import ControladorParametro
 from Modulos.Config import Conexion
 
+# Importación del controlador omnisciente de auditoría
+# (Asegúrate de que la ruta coincida con el lugar donde guardaste Auditorias.py)
+from Modulos.Auditorias import auditoria_global 
+
 class VentanaPrincipal(QMainWindow):
     def __init__(self, pasaporte=None):
         super().__init__()
@@ -32,6 +36,10 @@ class VentanaPrincipal(QMainWindow):
         self.admitido = self.pasaporte.get('admitido')
         self.permisos = self.pasaporte.get('permisos', {})
         self.conexion = Conexion()
+
+        # VINCULACIÓN DE AUDITORÍA: Activamos la sesión omnisciente
+        # Esto registrará automáticamente el inicio de sesión
+        auditoria_global.vincular_sesion(self.pasaporte)
 
         self.setWindowTitle(f"Sistema de Gestión de Biblioteca (Cenizas De Alejandría) | Usuario: {self.nombre_usuario}")
         self.setGeometry(100, 100, 1024, 600)
@@ -228,6 +236,9 @@ class VentanaPrincipal(QMainWindow):
             cursor.close()
             
         if expulsar:
+            # AUDITORÍA DE CIERRE FORZADO
+            auditoria_global.auditar_sesion(f"Cierre forzado: {razon}")
+            
             QMessageBox.critical(self, "Sesión Terminada por Seguridad", f"{razon}\n\nPor favor, vuelva a iniciar sesión.")
             try:
                 QApplication.quit()

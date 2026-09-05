@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QMessageBox
 
 from Modulos.Config import Conexion
 from Modulos.Views.InsumoViews import VistaTablaInsumo, FormularioInsumo
-
+from Modulos.Auditorias import auditoria_global
 
 class ControladorInsumo(QObject):
     """
@@ -96,12 +96,14 @@ class ControladorInsumo(QObject):
                     WHERE clave_runa=%s
                 """
                 cursor.execute(consulta, (estado, titulo, id_tipo, fecha, clave_runa))
+                auditoria_global.auditar_accion(2, "Insumos", f"Actualización de insumo RUNA: {clave_runa}")
             else:
                 consulta = """
                     INSERT INTO insumos (titulo, id_tipo_insumo, estado, fecha_adquisicion, clave_runa)
                     VALUES (%s, %s, %s, %s, %s)
                 """
                 cursor.execute(consulta, (titulo, id_tipo, estado, fecha, clave_runa))
+                auditoria_global.auditar_accion(1, "Insumos", f"Creación de insumo RUNA: {clave_runa}")
 
             self.bd.commit()
             self.insumo_actualizado.emit()  # Emitir señal después de guardar
@@ -115,6 +117,7 @@ class ControladorInsumo(QObject):
         cursor = self.bd.cursor()
         try:
             cursor.execute("DELETE FROM insumos WHERE clave_runa=%s", (clave_runa,))
+            auditoria_global.auditar_accion(4, "Insumos", f"Borrado físico de insumo RUNA: {clave_runa}")
             self.bd.commit()
         except Exception as e:
             self.bd.rollback()

@@ -42,8 +42,12 @@ class ValidadorCuenta(QDialog):
         self.aplicar_estilos_vanta()
         self.init_ui()
         
+        # Interceptamos la respuesta negativa de la conexión y del envío de correo
         if self.verificar_conexion():
-            self.enviar_correo()
+            if not self.enviar_correo():
+                QMessageBox.warning(self, "Error de Envío", "No se pudo enviar el correo de validación. Revise la configuración del servidor o las credenciales internas.")
+        else:
+            QMessageBox.warning(self, "Error de Conexión", "No hay conexión a internet. No se pudo establecer comunicación con el servidor DNS para el envío del correo.")
 
     def aplicar_estilos_vanta(self):
         self.setStyleSheet("""

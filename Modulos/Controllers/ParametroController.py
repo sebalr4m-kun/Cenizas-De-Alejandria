@@ -3,6 +3,7 @@ from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QMessageBox, QTableWidgetItem
 from Modulos.Models.ParametroModel import ParametroModel
 from Modulos.Views.ParametroViews import VistaTablaParametro, FormularioParametro
+from Modulos.Auditorias import auditoria_global
 
 class ControladorParametro(QObject):
     # Señal vital para notificar a otros módulos (como Usuarios) que hubo cambios
@@ -170,6 +171,7 @@ class ControladorParametro(QObject):
         try:
             if self.modo == 'crear':
                 self.model.guardar(rubro, nombre, 'ACTIVO', False, admitido=admitido, permisos=permisos_json)
+                auditoria_global.auditar_accion(1, "Parámetros", f"Creación de parámetro '{nombre}' en rubro '{rubro}'")
                 QMessageBox.information(None, "Éxito", f"Parámetro de {rubro} creado correctamente.")
             else:
                 if self.id_actual is None:
@@ -179,12 +181,15 @@ class ControladorParametro(QObject):
                 # Ejecuta el UPDATE, Inactivación o Borrado Físico
                 if estado_final in ('INACTIVO', 'INACTIVA'):
                     self.model.inactivar_parametro_y_dependientes(rubro, self.id_actual)
+                    auditoria_global.auditar_accion(3, "Parámetros", f"Inactivación de parámetro '{nombre}' en rubro '{rubro}'")
                     QMessageBox.information(None, "Éxito", f"Parámetro inactivado correctamente.")
                 elif 'ELIMINAR' in estado_final: # Detecta la opción de borrado físico ignorando si dice "(Peligro)" o no
                     self.model.eliminar_fisicamente(rubro, self.id_actual)
+                    auditoria_global.auditar_accion(4, "Parámetros", f"Borrado físico de parámetro '{nombre}' en rubro '{rubro}'")
                     QMessageBox.information(None, "Éxito", f"Parámetro eliminado físicamente de la base de datos.")
                 else:
                     self.model.guardar(rubro, nombre, estado_final, True, self.id_actual, admitido=admitido, permisos=permisos_json)
+                    auditoria_global.auditar_accion(2, "Parámetros", f"Actualización de parámetro '{nombre}' en rubro '{rubro}'")
                     QMessageBox.information(None, "Éxito", f"Parámetro de {rubro} actualizado correctamente.")
 
             # Actualizar la tabla local inmediatamente

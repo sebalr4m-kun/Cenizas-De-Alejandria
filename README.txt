@@ -369,6 +369,7 @@ El sistema utiliza la función export_to_excel para capturar y guardar la inform
 -- =============================================================================
 -- SISTEMA DE GESTIÓN DE BIBLIOTECA - RECONSTRUCCIÓN INTEGRAL
 -- Protocolo: Soberanía de IDs y Referenciación por RUNA
+-- Optimización: Soporte RBAC Modular Integrado (Ejemplo de Inicialización Completo)
 -- =============================================================================
 
 DROP DATABASE IF EXISTS bibliotecabd;
@@ -382,7 +383,9 @@ USE bibliotecabd;
 CREATE TABLE param_tipos_usuario (
     id_tipo_usuario INT AUTO_INCREMENT PRIMARY KEY,
     nombre VARCHAR(50) NOT NULL,
-    estado VARCHAR(10) DEFAULT 'ACTIVO'
+    estado VARCHAR(10) DEFAULT 'ACTIVO',
+    admitido TINYINT(1) DEFAULT 0, -- Switch maestro de acceso para el login
+    permisos TEXT                  -- Contenedor JSON serializado para los checkboxes modulares
 );
 
 CREATE TABLE param_tipos_insumo (
@@ -435,17 +438,17 @@ CREATE TABLE libros (
     id_libro INT AUTO_INCREMENT PRIMARY KEY,
     titulo VARCHAR(150) NOT NULL,
     isbn VARCHAR(20) UNIQUE NOT NULL,
-    estado VARCHAR(10) DEFAULT 'ACTIVO' -- Soluciona error anterior l.estado
+    estado VARCHAR(10) DEFAULT 'ACTIVO'
 );
 
 -- Unidades Físicas (Insumos)
 CREATE TABLE insumos (
-    id_insumo INT AUTO_INCREMENT PRIMARY KEY, -- Clave primaria para lógica de código
+    id_insumo INT AUTO_INCREMENT PRIMARY KEY,
     titulo VARCHAR(150) NOT NULL,
     id_tipo_insumo INT,
     estado VARCHAR(20) DEFAULT 'DISPONIBLE',
     fecha_adquisicion DATE,
-    clave_runa VARCHAR(50) UNIQUE NOT NULL, -- Identificador para búsqueda de usuario
+    clave_runa VARCHAR(50) UNIQUE NOT NULL,
     FOREIGN KEY (id_tipo_insumo) REFERENCES param_tipos_insumo(id_tipo_insumo)
 );
 
@@ -486,13 +489,13 @@ CREATE TABLE libro_genero (
 );
 
 -- -----------------------------------------------------------------------------
--- 4. GESTIÓN DE PRÉSTAMOS (Solución al error p.id_insumo)
+-- 4. GESTIÓN DE PRÉSTAMOS
 -- -----------------------------------------------------------------------------
 
 CREATE TABLE prestamos (
     id_prestamo INT AUTO_INCREMENT PRIMARY KEY,
     id_usuario INT,
-    id_insumo INT, -- Se usa el ID para la relación interna
+    id_insumo INT,
     fecha_prestamo TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     fecha_devolucion_esperada DATE,
     estado_prestamo VARCHAR(20) DEFAULT 'ACTIVO',
@@ -504,42 +507,44 @@ CREATE TABLE prestamos (
 -- 5. DATOS DE INICIALIZACIÓN
 -- -----------------------------------------------------------------------------
 
--- Tipos base requeridos por la lógica de controladores
-INSERT INTO param_tipos_usuario (nombre, estado) VALUES ('Bibliotecario', 'ACTIVO'), ('Lector', 'ACTIVO');
+-- Tipos base requeridos con el mapeo completo de permisos serializados para el controlador
+INSERT INTO param_tipos_usuario (nombre, estado, admitido, permisos) VALUES 
+('Bibliotecario', 'ACTIVO', 1, '{"Usuarios": {"ver": true, "crear": true, "editar": true, "eliminar": true}, "Insumos": {"ver": true, "crear": true, "editar": true, "eliminar": true}, "Libros": {"ver": true, "crear": true, "editar": true, "eliminar": true}, "Prestamos": {"ver": true, "crear": true, "editar": true, "eliminar": true}, "Parametros": {"ver": true, "crear": true, "editar": true, "eliminar": true}}'), 
+('Lector', 'ACTIVO', 1, '{"Usuarios": {"ver": false, "crear": false, "editar": false, "eliminar": false}, "Insumos": {"ver": true, "crear": false, "editar": false, "eliminar": false}, "Libros": {"ver": true, "crear": false, "editar": false, "eliminar": false}, "Prestamos": {"ver": true, "crear": true, "editar": false, "eliminar": false}, "Parametros": {"ver": false, "crear": false, "editar": false, "eliminar": false}}');
+
 INSERT INTO param_tipos_insumo (id_tipo_insumo, nombre, estado) VALUES (1, 'Papelería', 'ACTIVO'), (2, 'Mobiliario', 'ACTIVO'), (3, 'Libro', 'ACTIVO');
 
 -- -----------------------------------------------------------------------------
 -- 6. PROTOCOLO DE RECUPERACIÓN (SISTEMA DE PALABRAS MAESTRAS)
 -- -----------------------------------------------------------------------------
 
--- Diccionario global de 500 palabras
 CREATE TABLE param_diccionario_seguridad (
-    id_palabra INT PRIMARY KEY,
+    id_palabra INT PRIMARY KEY AUTO_INCREMENT,
     palabra VARCHAR(50) NOT NULL UNIQUE
 );
 
--- Tabla de claves de recuperación asociadas a usuarios
 CREATE TABLE seguridad_recuperacion (
     id_recuperacion INT AUTO_INCREMENT PRIMARY KEY,
     id_usuario INT UNIQUE,
-    indices_palabras TEXT NOT NULL, -- Guardaremos los 12 números separados por comas
-    salt_secreto VARCHAR(64),       -- Para el extra de seguridad que hablamos
+    indices_palabras TEXT NOT NULL,
+    salt_secreto VARCHAR(64),
     fecha_generacion TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (id_usuario) REFERENCES usuarios(id_usuario) ON DELETE CASCADE
 );
 
-USE bibliotecabd;
+-- =============================================================================
+-- POBLADO MASIVO DEL DICCIONARIO DE SEGURIDAD (1000 PALABRAS)
+-- Protocolo: Seguridad Persistente - Nivel Bibliotecario
+-- =============================================================================
 
 DROP TABLE IF EXISTS param_diccionario_seguridad;
 
--- Diccionario global de 500 palabras
 CREATE TABLE param_diccionario_seguridad (
     id_palabra INT PRIMARY KEY AUTO_INCREMENT,
     palabra VARCHAR(50) NOT NULL UNIQUE
 );
 
 INSERT IGNORE INTO param_diccionario_seguridad (palabra) VALUES
-
 ('Alfa'), ('Beta'), ('Gamma'), ('Delta'), ('Epsilon'), ('Zeta'), ('Eta'), ('Theta'), ('Iota'), ('Kappa'),
 ('Lambda'), ('Mu'), ('Nu'), ('Xi'), ('Omicron'), ('Pi'), ('Rho'), ('Sigma'), ('Tau'), ('Upsilon'),
 ('Phi'), ('Chi'), ('Psi'), ('Omega'), ('Quasar'), ('Pulsar'), ('Nebulosa'), ('Galaxia'), ('Andromeda'), ('Cenit'),
@@ -639,8 +644,44 @@ INSERT IGNORE INTO param_diccionario_seguridad (palabra) VALUES
 ('Trigo'), ('Pan'), ('Vino'), ('Miel'), ('Sal'), ('Aceite'), ('Seda'), ('Lana'), ('Cuero'), ('Lino'),
 ('Nudo'), ('Lazo'), ('Hilo'), ('Aguja'), ('Tijera'), ('Pala'), ('Pico'), ('Sierra'), ('Clavo'), ('Tornillo'),
 ('Llave'), ('Martillo'), ('Pinza'), ('Yunque'), ('Fragua'), ('Horno'), ('Molino'), ('Rueda'), ('Pozo'), ('Torre'),
-('Muro'), ('Foso'), ('Puente'), ('Camino'), ('Bosque'), ('Rio'), ('Valle'), ('Monte'), ('Cielo'), ('Universo'), ('Umbra'), ('Ratio'), ('Magnum'), ('Opus'), ('Primus'), ('Ultima'), ('Dominus'), ('Imperium'), ('Libertas'), ('Veritas'), ('Pax'), ('Bellum'), ('Fatum'), ('Tempus'), ('Spatium'), ('Codex'), ('Lex'), ('Vis'), ('Anima'), ('Corpus'), ('Spiritus'), ('Terra'), ('Aqua'), ('Ignis'), ('Aer'), ('Aether'), ('Chaos'), ('Cosmos'), ('Mundus'), ('Stella'), ('Luna'), ('Sol'), ('Nox'), ('Dies'), ('Vita'), ('Mors'), ('Scientia'), ('Sapientia'), ('Virtus'), ('Honor'), ('Gloria'), ('Fides'), ('Spes'), ('Caritas'), ('Amor'), ('Odium'), ('Metus'), ('Ira'), ('Gaudium'), ('Dolor'), ('Solitudo'), ('Silentium'), ('Clamor'), ('Vox'), ('Verbum'), ('Scriptura'), ('Littera'), ('Numerus'), ('Punctum'), ('Linea'), ('Circulus'), ('Triangulum'), ('Quadratum'), ('Sphaera'), ('Finis'), ('Cyber'), ('Quantum'), ('Entropy'), ('Parity'), ('Legacy'), ('Status'), ('System'), ('Root'), ('Admin'), ('Secure'), ('Void'), ('Null'), ('None'), ('True'), ('False'), ('Link'), ('Flow');
-
+('Muro'), ('Foso'), ('Puente'), ('Camino'), ('Bosque'), ('Rio'), ('Valle'), ('Monte'), ('Cielo'), ('Universo'), 
+('Umbra'), ('Ratio'), ('Magnum'), ('Opus'), ('Primus'), ('Ultima'), ('Dominus'), ('Imperium'), ('Libertas'), ('Veritas'), 
+('Pax'), ('Bellum'), ('Fatum'), ('Tempus'), ('Spatium'), ('Codex'), ('Lex'), ('Vis'), ('Anima'), ('Corpus'), 
+('Spiritus'), ('Terra'), ('Aqua'), ('Ignis'), ('Aer'), ('Aether'), ('Chaos'), ('Cosmos'), ('Mundus'), ('Stella'), 
+('Luna'), ('Sol'), ('Nox'), ('Dies'), ('Vita'), ('Mors'), ('Scientia'), ('Sapientia'), ('Virtus'), ('Honor'), 
+('Gloria'), ('Fides'), ('Spes'), ('Caritas'), ('Amor'), ('Odium'), ('Metus'), ('Ira'), ('Gaudium'), ('Dolor'), 
+('Solitudo'), ('Silentium'), ('Clamor'), ('Vox'), ('Verbum'), ('Scriptura'), ('Littera'), ('Numerus'), ('Punctum'), 
+('Linea'), ('Circulus'), ('Triangulum'), ('Quadratum'), ('Sphaera'), ('Finis'), ('Cyber'), ('Quantum'), ('Entropy'), 
+('Parity'), ('Legacy'), ('Status'), ('System'), ('Root'), ('Admin'), ('Secure'), ('Void'), ('Null'), ('None'), 
+('True'), ('False'), ('Link'), ('Flow');
 
 -- Confirmación de carga
 SELECT COUNT(*) FROM param_diccionario_seguridad;
+
+-- -----------------------------------------------------------------------------
+-- 7. MÓDULO DE AUDITORÍAS (Trazabilidad)
+-- -----------------------------------------------------------------------------
+
+CREATE TABLE param_acciones (
+    id_accion INT AUTO_INCREMENT PRIMARY KEY,
+    nombre_accion VARCHAR(50) NOT NULL,
+    descripcion VARCHAR(150)
+);
+
+INSERT INTO param_acciones (id_accion, nombre_accion, descripcion) VALUES
+(1, 'Crear', 'Inserción de nuevos registros'),
+(2, 'Modificar', 'Actualización de registros existentes'),
+(3, 'Borrado Lógico', 'Desactivación de registros sin eliminación física'),
+(4, 'Borrado Físico', 'Eliminación permanente de registros'),
+(5, 'Sesión', 'Inicio y cierre de sesión de usuarios');
+
+CREATE TABLE auditorias (
+    id_auditoria INT AUTO_INCREMENT PRIMARY KEY,
+    id_usuario INT,
+    id_accion INT,
+    modulo VARCHAR(50) NOT NULL,
+    elemento TEXT NOT NULL,
+    fecha_hora TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (id_usuario) REFERENCES usuarios(id_usuario) ON DELETE SET NULL,
+    FOREIGN KEY (id_accion) REFERENCES param_acciones(id_accion) ON DELETE RESTRICT
+);

@@ -3,6 +3,7 @@ from PySide6.QtWidgets import QMessageBox
 
 from Modulos.Config import Conexion
 from Modulos.Views.LibroViews import VistaLibro
+from Modulos.Auditorias import auditoria_global
 import random
 import string
 import time
@@ -63,7 +64,6 @@ class ControladorLibro(QObject):
             self.bd.commit() 
             
             cursor = self.bd.cursor(dictionary=True)
-            # SE CORRIGIÓ EL ERROR TIPOGRÁFICO: id_libro = l.id_libro (antes decía l.id_categoria)
             consulta = """
                  SELECT l.*, 
                         (SELECT COUNT(*) FROM insumos i WHERE i.titulo = l.titulo AND i.id_tipo_insumo = 3) AS stock_total,
@@ -121,6 +121,7 @@ class ControladorLibro(QObject):
                 # Actualizar datos básicos
                 cursor.execute("UPDATE libros SET titulo=%s, estado=%s WHERE id_libro=%s",
                                (titulo, estado, id_libro))
+                auditoria_global.auditar_accion(2, "Libros", f"Actualización de libro ISBN: {isbn}")
 
                 # Si el título cambió, debemos actualizar los registros de insumos vinculados
                 if titulo_ant != titulo:
@@ -131,6 +132,7 @@ class ControladorLibro(QObject):
                 cursor.execute("INSERT INTO libros (titulo, isbn, estado) VALUES (%s, %s, 'ACTIVO')",
                                (titulo, isbn))
                 id_libro = cursor.lastrowid
+                auditoria_global.auditar_accion(1, "Libros", f"Creación de libro ISBN: {isbn}")
 
             # Actualizar relaciones (Autor, Editorial, Categoría, Género)
             relaciones = [
@@ -157,6 +159,7 @@ class ControladorLibro(QObject):
                         INSERT INTO insumos (titulo, id_tipo_insumo, estado, fecha_adquisicion, clave_runa)
                         VALUES (%s, 3, 'DISPONIBLE', CURDATE(), %s)
                     """, (titulo, runa))
+                auditoria_global.auditar_accion(1, "Insumos", f"Agregados {diferencia} ejemplares físicos para el libro: {titulo}")
             elif diferencia < 0:
                 # Eliminar solo los que están disponibles (no prestados)
                 cursor.execute("""
@@ -164,6 +167,7 @@ class ControladorLibro(QObject):
                     WHERE titulo=%s AND id_tipo_insumo=3 AND estado = 'DISPONIBLE' 
                     LIMIT %s
                 """, (titulo, abs(diferencia)))
+                auditoria_global.auditar_accion(4, "Insumos", f"Retirados {abs(diferencia)} ejemplares físicos del libro: {titulo}")
 
             self.bd.commit()
             self.finalizar_accion()
@@ -190,6 +194,8 @@ class ControladorLibro(QObject):
             # Limpiar ejemplares e información de libro
             cursor.execute("DELETE FROM insumos WHERE titulo = %s AND id_tipo_insumo = 3", (tit,))
             cursor.execute("DELETE FROM libros WHERE id_libro = %s", (id_l,))
+
+            auditoria_global.auditar_accion(4, "Libros", f"Borrado físico total del libro ISBN: {isbn} y sus ejemplares")
 
             self.bd.commit()
             self.finalizar_accion()

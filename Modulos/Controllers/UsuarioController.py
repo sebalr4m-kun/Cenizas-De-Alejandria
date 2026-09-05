@@ -6,6 +6,7 @@ from PySide6.QtWidgets import QTableWidgetItem, QMessageBox
 from Modulos.Models.UsuarioModel import UsuarioModel
 from Modulos.Security.PasswordHasher import PasswordHasher
 from Modulos.AccountValidator import ValidadorCuenta
+from Modulos.Auditorias import auditoria_global
 
 class ControladorUsuario(QObject):
     datos_actualizados = Signal()
@@ -32,7 +33,6 @@ class ControladorUsuario(QObject):
         v = self.vista
         self.solicitar_notificacion.connect(v.mostrar_notificacion)
         
-        # Corrección obligatoria: Reconexión de botones de cambio de modo usando lambdas seguras
         v.btn_modo_crear.clicked.connect(lambda: self.establecer_modo_crear(inicial=False))
         v.btn_modo_editar.clicked.connect(self.establecer_modo_editar)
         v.btn_guardar.clicked.connect(self.manejar_guardado)
@@ -53,7 +53,6 @@ class ControladorUsuario(QObject):
             bd.commit()
             cursor = bd.cursor()
             try:
-                # Buscamos el email oficial que corresponde al ID de la sesión actual
                 cursor.execute("SELECT email FROM usuarios WHERE id_usuario = %s", (self.sesion_actual['id_usuario'],))
                 res = cursor.fetchone()
                 if res:
@@ -64,10 +63,6 @@ class ControladorUsuario(QObject):
                 cursor.close()
 
     def evaluar_bloqueo_autoedicion_rol(self):
-        """
-        Evalúa visualmente si el usuario cargado en el formulario es el mismo
-        que está operando el sistema. De ser así, bloquea el selector de tipo de cuenta.
-        """
         if self.modo == 'editar':
             email_en_edicion = self.vista.entrada_email.text().strip()
             if self.email_loggeado and self.email_loggeado == email_en_edicion:
@@ -80,10 +75,6 @@ class ControladorUsuario(QObject):
             self.vista.combo_tipo_cuenta.setEnabled(True)
             self.vista.combo_tipo_cuenta.setToolTip("")
 
-    # =========================================================================
-    # PUENTE DE RETROCOMPATIBILIDAD CON VISTA ACTUAL
-    # Evita que UsuarioViews crashee hasta que sea actualizado en el siguiente paso
-    # =========================================================================
     @property
     def es_upgrade_a_bibliotecario(self):
         return self.es_upgrade_a_admitido
@@ -108,7 +99,6 @@ class ControladorUsuario(QObject):
 
     def cargar_combos(self):
         try:
-            # Obtención directa de los flags y permisos de la base de datos
             cursor = self.model.bd.cursor(dictionary=True)
             cursor.execute("SELECT id_tipo_usuario, nombre, admitido FROM param_tipos_usuario WHERE estado = 'ACTIVO'")
             tipos = cursor.fetchall()
@@ -116,7 +106,6 @@ class ControladorUsuario(QObject):
 
             self.vista.combo_tipo_cuenta.clear()
             for t in tipos:
-                # Estética trascendental: Distintivo visual para cuentas con accesos especiales
                 icono = "🛡️ " if t.get('admitido') else "👤 "
                 nombre_visual = f"{icono}{t['nombre']}"
                 self.vista.combo_tipo_cuenta.addItem(nombre_visual, t['id_tipo_usuario'])
@@ -124,7 +113,6 @@ class ControladorUsuario(QObject):
             self.solicitar_notificacion.emit('crit', "Error de Carga", f"Fallo al obtener tipos: {e}", None)
 
     def _obtener_estados_admision(self):
-        """Helper robusto guiado puramente por los IDs de la base de datos."""
         id_actual = self.vista.combo_tipo_cuenta.currentData()
         es_admitido = self.model.es_tipo_admitido(id_actual) if id_actual is not None else False
         
@@ -234,7 +222,6 @@ class ControladorUsuario(QObject):
             self.vista.entrada_nombre.setText(usuario['nombre'])
             self.pass_actual_bd = usuario.get('contraseña', '')
             
-            # Búsqueda infalible mediante el ID (Data), ignorando por completo el texto y sus símbolos
             idx = self.vista.combo_tipo_cuenta.findData(usuario.get('id_tipo_usuario'))
             if idx >= 0:
                 self.vista.id_rol_original = usuario.get('id_tipo_usuario')
@@ -278,7 +265,6 @@ class ControladorUsuario(QObject):
         nuevo_estado = self.vista.combo_estado_cuenta.currentText()
         nuevo_rol_id = id_tipo
 
-        # --- BARRERA INFRANQUEABLE 1: BLOQUEO DE AUTO-EDICIÓN DE ROL ---
         if self.modo == 'editar' and self.email_loggeado and self.email_loggeado == email_en_edicion:
             usuario_bd = self.model.obtener_por_email(email_en_edicion)
             if usuario_bd and usuario_bd.get('id_tipo_usuario') != nuevo_rol_id:
@@ -290,10 +276,8 @@ class ControladorUsuario(QObject):
                 )
                 return False
 
-        # --- BARRERA INFRANQUEABLE 2: PREVENCIÓN DIOS DE LA MÁQUINA (DDLM) ---
         if self.modo == 'editar' and nuevo_estado in ['SUSPENDIDA', 'ELIMINADA']:
             try:
-                # Instanciamos el modelo de login para acceder a las verificaciones globales
                 from Modulos.Models.InicioSesionModel import LoginModel
             except ImportError:
                 from Modulos.Models.InicioSesionModel import LoginModel
@@ -301,7 +285,6 @@ class ControladorUsuario(QObject):
             lm = LoginModel()
             lista_salvavidas = getattr(lm, 'obtener_lista_salvavidas_ddlm', lambda: [])()
 
-            # Evaluación SI Y SÓLO SI el usuario es un salvavidas y es el ÚNICO restante
             if email_en_edicion in lista_salvavidas and len(lista_salvavidas) == 1:
                 self.solicitar_notificacion.emit(
                     'crit',
@@ -309,7 +292,6 @@ class ControladorUsuario(QObject):
                     "Acción cancelada. Esta cuenta es actualmente el ÚNICO pilar estructural que previene que el sistema caiga en el modo Dios De La Máquina. No puedes suspender ni eliminar esta cuenta de usuario hasta que exista, al menos, una cuenta activa adicional con un tipo de usuario que posea los mismos o más permisos de acceso requeridos para mantener el sistema a flote.",
                     None
                 )
-                # Revertimos visualmente y de inmediato el componente a un estado seguro
                 self.vista.combo_estado_cuenta.setCurrentText("ACTIVA")
                 return False
 
@@ -325,9 +307,12 @@ class ControladorUsuario(QObject):
             if not self.vista.verificar_coincidencia_contrasenas():
                 return False
 
+        if nueva_pwd and len(nueva_pwd) < 8:
+            self.solicitar_notificacion.emit('warn', "Seguridad Débil", "La contraseña debe tener un mínimo de 8 caracteres.", None)
+            return False
+
         es_admitido, fue_admitido, id_actual, id_orig = self._obtener_estados_admision()
 
-        # ALERTA DINÁMICA DE SEGURIDAD PARA CAMBIO DE ROLES ADMITIDOS
         if self.modo == 'editar' and fue_admitido and id_actual != id_orig:
             cursor = self.model.bd.cursor(dictionary=True)
             cursor.execute("SELECT admitido, permisos FROM param_tipos_usuario WHERE id_tipo_usuario = %s", (id_actual,))
@@ -378,7 +363,37 @@ class ControladorUsuario(QObject):
                     return False
 
                 pals = self.model.guardar_bd(nombre, email, id_tipo, "ACTIVA", nueva_pwd, False, False)
+                auditoria_global.auditar_accion(1, "Usuarios", f"Creación de usuario: {email}")
                 
+                # --- AUTO-ENLACE DE SESIÓN DDLM Y REESCRITURA DE AUDITORÍA ---
+                if self.sesion_actual and self.sesion_actual.get('id_usuario') in [0, None]:
+                    usuario_nuevo = self.model.obtener_por_email(email)
+                    if usuario_nuevo:
+                        nuevo_id = usuario_nuevo['id_usuario']
+                        
+                        # Actualizamos el pasaporte en memoria
+                        self.sesion_actual['id_usuario'] = nuevo_id
+                        self.sesion_actual['nombre'] = usuario_nuevo['nombre']
+                        self.email_loggeado = email
+                        
+                        # Reescribir retroactivamente los registros NULL en la tabla auditorias
+                        try:
+                            cursor_audit = self.model.bd.cursor()
+                            cursor_audit.execute(
+                                "UPDATE auditorias SET id_usuario = %s WHERE id_usuario IS NULL", 
+                                (nuevo_id,)
+                            )
+                            self.model.bd.commit()
+                            cursor_audit.close()
+                        except Exception as e:
+                            print(f"[ERROR AUDITORÍA] No se pudo reescribir el historial nulo: {e}")
+
+                        # Refrescar el módulo de auditoría global para futuras acciones
+                        try:
+                            auditoria_global.vincular_sesion(self.sesion_actual)
+                        except Exception:
+                            pass
+
                 if es_admitido and hay_senal:
                     self.solicitar_notificacion.emit('validador_cuenta', "Validación Requerida", email, pals)
                     return True
@@ -389,9 +404,11 @@ class ControladorUsuario(QObject):
                 estado = nuevo_estado
                 if estado == "SUSPENDIDA":
                     self.model.eliminar_logico(email)
+                    auditoria_global.auditar_accion(3, "Usuarios", f"Suspensión lógica de usuario: {email}")
                     msg = "La cuenta ha sido suspendida."
                 elif estado == "ELIMINADA":
                     self.model.eliminar_physico(email) if hasattr(self.model, 'eliminar_physico') else self.model.eliminar_fisico(email)
+                    auditoria_global.auditar_accion(4, "Usuarios", f"Borrado físico de usuario: {email}")
                     msg = "Registro eliminado permanentemente."
                 else:
                     recovery_exitoso = getattr(self.vista, '_recovery_exitoso', False)
@@ -406,6 +423,7 @@ class ControladorUsuario(QObject):
 
                     pwd_a_usar = nueva_pwd if (nueva_pwd or self.es_upgrade_a_admitido) else pass_actual
                     pals = self.model.guardar_bd(nombre, email, id_tipo, "ACTIVA", pwd_a_usar, True, self.es_upgrade_a_admitido)
+                    auditoria_global.auditar_accion(2, "Usuarios", f"Actualización de usuario: {email}")
                     msg = "Información de perfil actualizada."
 
                     if self.es_upgrade_a_admitido and hay_senal:

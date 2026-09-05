@@ -126,6 +126,11 @@ class VistaUsuario(QWidget):
         # Filtro estricto para correos: solo letras Unicode (\p{L}), números (\d o 0-9), arroba y punto.
         regex_email = QRegularExpression(r"^[\p{L}0-9@.]*$")
         self.entrada_email.setValidator(QRegularExpressionValidator(regex_email, self))
+
+        # Filtro estricto para contraseñas: denegar espacios
+        regex_pass = QRegularExpression(r"^[^\s]*$")
+        self.entrada_pass_nueva.setValidator(QRegularExpressionValidator(regex_pass, self))
+        self.entrada_pass_confirmar.setValidator(QRegularExpressionValidator(regex_pass, self))
         
         # Interceptar asignaciones programáticas del controlador en el ComboBox
         self._orig_setCurrentIndex = self.combo_tipo_cuenta.setCurrentIndex
@@ -402,12 +407,19 @@ class VistaUsuario(QWidget):
 
         es_admitido, fue_admitido, _, _ = self.parent_controller._obtener_estados_admision()
         
+        # Helper para forzar caracteres especiales excluyendo alfanuméricos y letras con tildes comunes
+        def es_compleja(pwd):
+            return bool(re.search(r"[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ]", pwd))
+        
         if self.btn_modo_crear.isChecked():
             if es_admitido:
                 pass_nueva = self.entrada_pass_nueva.text().strip()
                 pass_conf = self.entrada_pass_confirmar.text().strip()
                 if not pass_nueva:
                     QMessageBox.warning(self, "Error de Validación", "La nueva contraseña es requerida para cuentas ADMItidas.")
+                    return False
+                if not es_compleja(pass_nueva):
+                    QMessageBox.warning(self, "Error de Seguridad", "La contraseña debe contener obligatoriamente al menos un carácter especial (símbolo).")
                     return False
                 if pass_nueva != pass_conf:
                     QMessageBox.warning(self, "Error de Validación", "Las contraseñas ingresadas no coinciden. Por favor verifíquelas.")
@@ -427,6 +439,9 @@ class VistaUsuario(QWidget):
                     pass_nueva = self.entrada_pass_nueva.text().strip()
                     pass_conf = self.entrada_pass_confirmar.text().strip()
                     if pass_nueva or pass_conf:
+                        if not es_compleja(pass_nueva):
+                            QMessageBox.warning(self, "Error de Seguridad", "La nueva contraseña debe contener obligatoriamente al menos un carácter especial (símbolo).")
+                            return False
                         if pass_nueva != pass_conf:
                             QMessageBox.warning(self, "Error de Validación", "Las contraseñas nuevas no coinciden.")
                             return False
@@ -437,6 +452,9 @@ class VistaUsuario(QWidget):
                 pass_conf = self.entrada_pass_confirmar.text().strip()
                 if not pass_nueva:
                     QMessageBox.warning(self, "Error de Validación", "La nueva contraseña es requerida para el alta como cuenta ADMItida.")
+                    return False
+                if not es_compleja(pass_nueva):
+                    QMessageBox.warning(self, "Error de Seguridad", "La contraseña debe contener obligatoriamente al menos un carácter especial (símbolo).")
                     return False
                 if pass_nueva != pass_conf:
                     QMessageBox.warning(self, "Error de Validación", "Las contraseñas ingresadas no coinciden. Por favor verifíquelas.")
