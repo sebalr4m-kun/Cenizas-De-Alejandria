@@ -13,7 +13,7 @@ const MainViews = {
                 <h1>${content.hero.title}</h1>
                 <h2>${content.hero.tagline}</h2>
                 <p>${content.hero.description}</p>
-                <button id="heroCta">${content.hero.cta}</button>
+                <a href="launcher_api/Cenizas de Alejandría - Core 1.0.0.zip" download="Cenizas de Alejandría - Core 1.0.0.zip" id="heroCta" class="hero-btn" style="display: inline-block; padding: 10px 20px; background-color: #0288d1; color: white; text-decoration: none; border-radius: 5px; font-weight: bold;">${content.hero.cta}</a>
             </header>
             
             <section id="problem">

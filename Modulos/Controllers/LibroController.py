@@ -1,35 +1,102 @@
+import random
+import string
+import time
 from PySide6.QtCore import Signal, QObject
 from PySide6.QtWidgets import QMessageBox
 
 from Modulos.Config import Conexion
 from Modulos.Views.LibroViews import VistaLibro
-import random
-import string
-import time
+from Modulos.Auditorias import auditoria_global
+
+# Importación desacoplada del modelo MVC
+try:
+    from Modulos.Models.LibroModel import ModeloLibro
+except ImportError:
+    try:
+        from Modulos.Models.LibroModel import LibroModel as ModeloLibro
+    except ImportError:
+        ModeloLibro = None
 
 
 class ControladorLibro(QObject):
-    libro_guardado = Signal()  # Señal para notificar cambios a MainWindow
+    # Emisión dual de señales para máxima sincronización en MainWindow
+    libro_guardado = Signal()
+    datos_actualizados = Signal()
 
     def __init__(self):
         super().__init__()
-        self.bd = Conexion().obtener_conexion()
+        self.conexion_obj = Conexion()
+        self.bd = self.conexion_obj.obtener_conexion()
         self.modo = 'crear'
 
-        # Referencias
+        # Instanciación segura del Modelo MVC
+        if ModeloLibro:
+            try:
+                self.model = ModeloLibro()
+            except Exception as e:
+                print(f"[ADVERTENCIA] No se pudo instanciar ModeloLibro: {e}")
+                self.model = None
+        else:
+            self.model = None
+
+        # Referencias de la interfaz gráfica
         self.vista = None
         self.widget_vista = None
         self.widget_formulario = None
         self.tabla = None
 
-    # ==================== CARGA DE DATOS (SOLO LÓGICA) ====================
+    # ==================== CARGA Y OBTENCIÓN DE DATOS ====================
+
     def cargar_datos(self):
         """Obtiene la lista de libros con stock calculado para la tabla del catálogo"""
-        if not self.vista: return
+        if not self.vista:
+            return
         try:
             # Sincronización cruzada: Limpia la transacción para asegurar datos frescos de Insumos
-            self.bd.commit() 
-            
+            if self.bd:
+                self.bd.commit()
+
+            libros = []
+            if self.model and hasattr(self.model, 'obtener_todos'):
+                libros = self.model.obtener_todos()
+            elif self.model and hasattr(self.model, 'obtener_libros'):
+                libros = self.model.obtener_libros()
+            else:
+                cursor = self.bd.cursor(dictionary=True)
+                consulta = """
+                    SELECT l.titulo, l.isbn, 
+                           COALESCE(GROUP_CONCAT(DISTINCT a.nombre_completo SEPARATOR ', '), '-') AS autor, 
+                           (SELECT COUNT(*) FROM insumos i 
+                            WHERE i.titulo = l.titulo AND i.id_tipo_insumo = 3) AS stock,
+                           (SELECT COUNT(*) FROM insumos i 
+                            WHERE i.titulo = l.titulo AND i.id_tipo_insumo = 3 
+                              AND i.estado = 'DISPONIBLE') AS cantidad_disponible
+                    FROM libros l
+                    LEFT JOIN libro_autor la ON l.id_libro = la.id_libro
+                    LEFT JOIN param_autores a ON la.id_autor = a.id_autor
+                    WHERE l.estado = 'ACTIVO'
+                    GROUP BY l.id_libro, l.titulo, l.isbn
+                    ORDER BY l.titulo
+                """
+                cursor.execute(consulta)
+                libros = cursor.fetchall()
+                cursor.close()
+
+            self.vista.actualizar_tabla(libros)
+        except Exception as e:
+            print(f"Error crítico en controlador al cargar datos de libros: {e}")
+
+    def obtener_todos(self):
+        """Método de extracción utilizado para la exportación masiva en MainWindow"""
+        try:
+            if self.bd:
+                self.bd.commit()
+
+            if self.model and hasattr(self.model, 'obtener_todos'):
+                return self.model.obtener_todos()
+            elif self.model and hasattr(self.model, 'obtener_libros'):
+                return self.model.obtener_libros()
+
             cursor = self.bd.cursor(dictionary=True)
             consulta = """
                 SELECT l.titulo, l.isbn, 
@@ -49,9 +116,10 @@ class ControladorLibro(QObject):
             cursor.execute(consulta)
             libros = cursor.fetchall()
             cursor.close()
-            self.vista.actualizar_tabla(libros)
+            return libros
         except Exception as e:
-            print(f"Error crítico en controlador al cargar datos: {e}")
+            print(f"Error al obtener todos los libros: {e}")
+            return []
 
     def obtener_por_isbn(self, isbn):
         """
@@ -59,11 +127,13 @@ class ControladorLibro(QObject):
         para auto-completar el formulario de edición.
         """
         try:
-            # Sincronización cruzada: Limpia la transacción para asegurar datos frescos
-            self.bd.commit() 
-            
+            if self.bd:
+                self.bd.commit()
+
+            if self.model and hasattr(self.model, 'obtener_por_isbn'):
+                return self.model.obtener_por_isbn(isbn)
+
             cursor = self.bd.cursor(dictionary=True)
-            # SE CORRIGIÓ EL ERROR TIPOGRÁFICO: id_libro = l.id_libro (antes decía l.id_categoria)
             consulta = """
                  SELECT l.*, 
                         (SELECT COUNT(*) FROM insumos i WHERE i.titulo = l.titulo AND i.id_tipo_insumo = 3) AS stock_total,
@@ -85,6 +155,12 @@ class ControladorLibro(QObject):
     # ==================== GESTIÓN DE RUNAS Y STOCK ====================
 
     def verificar_existencia_runa(self, clave_runa):
+        """Verifica si una clave RUNA ya está registrada en la tabla insumos"""
+        if self.model and hasattr(self.model, 'verificar_existencia_runa'):
+            return self.model.verificar_existencia_runa(clave_runa)
+
+        if not self.bd:
+            return False
         self.bd.commit()
         cursor = self.bd.cursor()
         try:
@@ -98,6 +174,9 @@ class ControladorLibro(QObject):
 
     def generar_runa_unica(self):
         """Genera un código numérico único de 6 dígitos para cada ejemplar físico"""
+        if self.model and hasattr(self.model, 'generar_runa_unica'):
+            return self.model.generar_runa_unica()
+
         caracteres = string.digits
         longitud = 6
         for _ in range(100):
@@ -110,19 +189,29 @@ class ControladorLibro(QObject):
 
     def guardar_bd(self, titulo, isbn, id_autor, id_editorial, id_categoria, id_genero, stock, estado, es_actualizacion):
         """Procesa el guardado lógico (Libros) y físico (Insumos)"""
+        if self.model and hasattr(self.model, 'guardar_libro'):
+            try:
+                res = self.model.guardar_libro(titulo, isbn, id_autor, id_editorial, id_categoria, id_genero, stock, estado, es_actualizacion)
+                self.finalizar_accion()
+                return res
+            except Exception as e:
+                raise e
+
         cursor = self.bd.cursor()
         try:
             if es_actualizacion:
                 cursor.execute("SELECT id_libro, titulo FROM libros WHERE isbn = %s", (isbn,))
                 fila = cursor.fetchone()
-                if not fila: raise Exception("Libro no encontrado para actualizar.")
+                if not fila:
+                    raise Exception("Libro no encontrado para actualizar.")
                 id_libro, titulo_ant = fila
 
                 # Actualizar datos básicos
                 cursor.execute("UPDATE libros SET titulo=%s, estado=%s WHERE id_libro=%s",
                                (titulo, estado, id_libro))
+                auditoria_global.auditar_accion(2, "Libros", f"Actualización de libro ISBN: {isbn}")
 
-                # Si el título cambió, debemos actualizar los registros de insumos vinculados
+                # Si el título cambió, actualizar registros de insumos vinculados
                 if titulo_ant != titulo:
                     cursor.execute("UPDATE insumos SET titulo=%s WHERE titulo=%s AND id_tipo_insumo=3",
                                    (titulo, titulo_ant))
@@ -131,8 +220,9 @@ class ControladorLibro(QObject):
                 cursor.execute("INSERT INTO libros (titulo, isbn, estado) VALUES (%s, %s, 'ACTIVO')",
                                (titulo, isbn))
                 id_libro = cursor.lastrowid
+                auditoria_global.auditar_accion(1, "Libros", f"Creación de libro ISBN: {isbn}")
 
-            # Actualizar relaciones (Autor, Editorial, Categoría, Género)
+            # Actualizar relaciones paramétricas
             relaciones = [
                 ('libro_autor', 'id_autor', id_autor),
                 ('libro_editorial', 'id_editorial', id_editorial),
@@ -145,7 +235,7 @@ class ControladorLibro(QObject):
                     cursor.execute(f"INSERT INTO {tabla} (id_libro, {col}) VALUES (%s, %s)",
                                    (id_libro, id_val))
 
-            # Sincronización de ejemplares físicos (Stock)
+            # Sincronización de ejemplares físicos (Stock en Insumos)
             cursor.execute("SELECT COUNT(*) FROM insumos WHERE titulo=%s AND id_tipo_insumo=3", (titulo,))
             stock_actual = cursor.fetchone()[0]
             diferencia = stock - stock_actual
@@ -157,13 +247,15 @@ class ControladorLibro(QObject):
                         INSERT INTO insumos (titulo, id_tipo_insumo, estado, fecha_adquisicion, clave_runa)
                         VALUES (%s, 3, 'DISPONIBLE', CURDATE(), %s)
                     """, (titulo, runa))
+                auditoria_global.auditar_accion(1, "Insumos", f"Agregados {diferencia} ejemplares físicos para el libro: {titulo}")
             elif diferencia < 0:
-                # Eliminar solo los que están disponibles (no prestados)
+                # Eliminar solo ejemplares 'DISPONIBLE'
                 cursor.execute("""
                     DELETE FROM insumos 
                     WHERE titulo=%s AND id_tipo_insumo=3 AND estado = 'DISPONIBLE' 
                     LIMIT %s
                 """, (titulo, abs(diferencia)))
+                auditoria_global.auditar_accion(4, "Insumos", f"Retirados {abs(diferencia)} ejemplares físicos del libro: {titulo}")
 
             self.bd.commit()
             self.finalizar_accion()
@@ -176,11 +268,20 @@ class ControladorLibro(QObject):
 
     def eliminar_todo(self, isbn):
         """Borrado físico completo de un libro y sus dependencias"""
+        if self.model and hasattr(self.model, 'eliminar_libro'):
+            try:
+                res = self.model.eliminar_libro(isbn)
+                self.finalizar_accion()
+                return res
+            except Exception as e:
+                raise e
+
         cursor = self.bd.cursor()
         try:
             cursor.execute("SELECT id_libro, titulo FROM libros WHERE isbn = %s", (isbn,))
             fila = cursor.fetchone()
-            if not fila: raise Exception("No se encontró el libro a eliminar.")
+            if not fila:
+                raise Exception("No se encontró el libro a eliminar.")
             id_l, tit = fila
 
             # Limpiar relaciones paramétricas
@@ -190,6 +291,8 @@ class ControladorLibro(QObject):
             # Limpiar ejemplares e información de libro
             cursor.execute("DELETE FROM insumos WHERE titulo = %s AND id_tipo_insumo = 3", (tit,))
             cursor.execute("DELETE FROM libros WHERE id_libro = %s", (id_l,))
+
+            auditoria_global.auditar_accion(4, "Libros", f"Borrado físico total del libro ISBN: {isbn} y sus ejemplares")
 
             self.bd.commit()
             self.finalizar_accion()
@@ -212,13 +315,11 @@ class ControladorLibro(QObject):
 
     def obtener_widget_formulario(self, ctrl_param):
         if not self.widget_formulario:
-            # Asegurar que la vista esté instanciada
             if not self.vista:
                 self.vista = VistaLibro(self)
             
             self.widget_formulario = self.vista.construir_formulario(ctrl_param)
             
-            # Conexión para actualizar combos cuando se crean nuevos parámetros (Autores, etc.)
             if hasattr(ctrl_param, 'parametro_guardado'):
                 ctrl_param.parametro_guardado.connect(
                     lambda: self.vista._cargar_datos_combo(self.vista.combo_autor, "Autor", ctrl_param)
@@ -239,3 +340,4 @@ class ControladorLibro(QObject):
         """Refresca los datos locales y notifica al sistema global"""
         self.cargar_datos()
         self.libro_guardado.emit()
+        self.datos_actualizados.emit()

@@ -221,12 +221,6 @@ class FormularioInsumo(QWidget):
         exito = self.ctrl.manejar_guardado(datos)
         
         if exito:
-            # 1. Solución Formulario Fantasma: Resetear y ocultar tras guardar
-            self.establecer_modo('crear', inicial=True)
-            
-            # 2. Sincronización: Emitir señal para que la matriz de Libros se actualice
-            # El controlador debe estar conectado a esta señal para refrescar la otra vista.
+            # 1. Sincronización: Emitir señal para que la matriz de Libros se actualice.
+            # (El controlador ya maneja la limpieza del formulario y la actualización de su propia vista)
             self.cambio_realizado.emit()
-            
-            # 3. Forzar actualización de la tabla local
-            self.ctrl.actualizar_vistas()

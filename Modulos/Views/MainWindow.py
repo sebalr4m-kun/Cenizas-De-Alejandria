@@ -13,9 +13,13 @@ from PySide6.QtCore import Qt
 from Modulos.Controllers.UsuarioController import ControladorUsuario
 from Modulos.Controllers.InsumoController import ControladorInsumo
 from Modulos.Controllers.LibroController import ControladorLibro
-from Modulos.Controllers.PrestamoController import ControladorPrestamo
+# Importación del controlador real de préstamos activada
+from Modulos.Controllers.PrestamoController import ControladorPrestamo 
 from Modulos.Controllers.ParametroController import ControladorParametro
 from Modulos.Config import Conexion
+
+# Importación del controlador omnisciente de auditoría
+from Modulos.Auditorias import auditoria_global 
 
 class VentanaPrincipal(QMainWindow):
     def __init__(self, pasaporte=None):
@@ -33,6 +37,9 @@ class VentanaPrincipal(QMainWindow):
         self.permisos = self.pasaporte.get('permisos', {})
         self.conexion = Conexion()
 
+        # VINCULACIÓN DE AUDITORÍA: Activamos la sesión omnisciente
+        auditoria_global.vincular_sesion(self.pasaporte)
+
         self.setWindowTitle(f"Sistema de Gestión de Biblioteca (Cenizas De Alejandría) | Usuario: {self.nombre_usuario}")
         self.setGeometry(100, 100, 1024, 600)
 
@@ -40,11 +47,13 @@ class VentanaPrincipal(QMainWindow):
         self.ctrl_param = ControladorParametro()
         self.ctrl_usuario = ControladorUsuario()
         
-        # INYECCIÓN DE SESIÓN: Transferimos el pasaporte de seguridad al controlador
+        # INYECCIÓN DE SESIÓN
         self.ctrl_usuario.establecer_sesion_actual(self.pasaporte)
 
         self.ctrl_insumo = ControladorInsumo()
         self.ctrl_libro = ControladorLibro()
+        
+        # INYECCIÓN DEL CONTROLADOR REAL DE PRÉSTAMOS
         self.ctrl_prestamo = ControladorPrestamo()
 
         self.controladores = [
@@ -123,24 +132,18 @@ class VentanaPrincipal(QMainWindow):
             print(f"[CRÍTICO] Fallo al aplicar restricciones: {e}")
 
     def _obtener_permisos_seguro(self, nombre_modulo):
-        """
-        Solución definitiva al problema de mayúsculas/minúsculas y acentos del JSON.
-        Mapea exactamente lo que llega de la BD sin importar cómo esté escrito.
-        """
         mapeo_db = {
             "Usuarios": "usuarios",
             "Insumos": "insumos",
             "Libros": "libros",
             "Préstamos": "prestamos", 
-            "Parámetros": "parámetros" # json.loads interpreta \u00e1 como á
+            "Parámetros": "parámetros" 
         }
         clave_ideal = mapeo_db.get(nombre_modulo, nombre_modulo.lower())
         
-        # Intento 1: Coincidencia exacta con el diccionario
         if clave_ideal in self.permisos:
             return self.permisos[clave_ideal]
             
-        # Intento 2: Búsqueda dinámica tolerante a errores ortográficos
         for k, v in self.permisos.items():
             k_norm = k.lower().replace("á", "a").replace("é", "e")
             clave_norm = clave_ideal.lower().replace("á", "a").replace("é", "e")
@@ -157,7 +160,6 @@ class VentanaPrincipal(QMainWindow):
         al_menos_uno_visible = False
         primer_indice_visible = 0
 
-        # Iterar mapeando de forma segura
         for i, modulo in enumerate(self.mapa_modulos):
             perms = self._obtener_permisos_seguro(modulo)
             puede_ver = perms.get('ver', False)
@@ -217,7 +219,6 @@ class VentanaPrincipal(QMainWindow):
                 except Exception:
                     permisos_db_dict = {}
                     
-                # Evalúa diferencias ignorando el orden interno de Python
                 if self.permisos != permisos_db_dict:
                     expulsar = True
                     razon = "Sus privilegios de acceso al sistema han sido modificados remotamente."
@@ -228,12 +229,14 @@ class VentanaPrincipal(QMainWindow):
             cursor.close()
             
         if expulsar:
+            auditoria_global.auditar_sesion(f"Cierre forzado: {razon}")
+            
             QMessageBox.critical(self, "Sesión Terminada por Seguridad", f"{razon}\n\nPor favor, vuelva a iniciar sesión.")
             try:
                 QApplication.quit()
                 os.execl(sys.executable, sys.executable, *sys.argv)
             except Exception:
-                sys.exit(1) # Cierre forzado seguro si el OS bloquea el execl
+                sys.exit(1)
 
     def _conectar_guardado_usuarios(self):
         try:
@@ -256,12 +259,22 @@ class VentanaPrincipal(QMainWindow):
     def _conectar_senales_recarga(self):
         if hasattr(self.ctrl_usuario, 'datos_actualizados'):
             self.ctrl_usuario.datos_actualizados.connect(self.recargar_todo)
+            
+        # Conexión dual para Libros para asegurar compatibilidad MVC
         if hasattr(self.ctrl_libro, 'libro_guardado'):
             self.ctrl_libro.libro_guardado.connect(self.recargar_todo)
+        if hasattr(self.ctrl_libro, 'datos_actualizados'):
+            self.ctrl_libro.datos_actualizados.connect(self.recargar_todo)
+            
         if hasattr(self.ctrl_insumo, 'datos_actualizados'):
             self.ctrl_insumo.datos_actualizados.connect(self.recargar_todo)
+            
         if hasattr(self.ctrl_param, 'parametro_guardado'):
             self.ctrl_param.parametro_guardado.connect(self.recargar_todo)
+            
+        # NUEVA CONEXIÓN PARA PRÉSTAMOS
+        if hasattr(self.ctrl_prestamo, 'datos_actualizados'):
+            self.ctrl_prestamo.datos_actualizados.connect(self.recargar_todo)
 
     def recargar_todo(self):
         for ctrl in self.controladores:
@@ -331,11 +344,31 @@ class VentanaPrincipal(QMainWindow):
                 return
 
         self.recargar_todo()
+        
+        # Extracción segura tolerante al patrón MVC aislando los Modelos
+        datos_insumos = []
+        if hasattr(self.ctrl_insumo, 'model') and hasattr(self.ctrl_insumo.model, 'obtener_todos_insumos'):
+            datos_insumos = self.ctrl_insumo.model.obtener_todos_insumos()
+        elif hasattr(self.ctrl_insumo, 'obtener_todos'):
+            datos_insumos = self.ctrl_insumo.obtener_todos()
+            
+        datos_libros = []
+        if hasattr(self.ctrl_libro, 'model') and hasattr(self.ctrl_libro.model, 'obtener_todos'):
+            datos_libros = self.ctrl_libro.model.obtener_todos()
+        elif hasattr(self.ctrl_libro, 'obtener_todos'):
+            datos_libros = self.ctrl_libro.obtener_todos()
+
+        datos_prestamos = []
+        if hasattr(self.ctrl_prestamo, 'model') and hasattr(self.ctrl_prestamo.model, 'obtener_todos'):
+             datos_prestamos = self.ctrl_prestamo.model.obtener_todos()
+
         datos_para_exportar = {
             "Usuarios": self.ctrl_usuario.model.obtener_todos() if hasattr(self.ctrl_usuario, 'model') else [],
-            "Insumos": self.ctrl_insumo.obtener_todos() if hasattr(self.ctrl_insumo, 'obtener_todos') else [],
-            "Libros": self.ctrl_libro.obtener_todos() if hasattr(self.ctrl_libro, 'obtener_todos') else [],
+            "Insumos": datos_insumos,
+            "Libros": datos_libros,
+            "Préstamos": datos_prestamos
         }
+        
         ruta_archivo, _ = QFileDialog.getSaveFileName(
             self, "Guardar Exportación", 
             f'Export_Lib_{datetime.now().strftime("%Y%m%d_%H%M")}.xlsx', "Excel (*.xlsx)"

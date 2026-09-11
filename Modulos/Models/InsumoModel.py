@@ -16,6 +16,7 @@ class InsumoModel:
         Verifica si una clave RUNA ya está registrada.
         Llamada por: generar_runa_unica, manejar_guardado (vía Controlador)
         """
+        self.conexion_bd.commit() # CORRECCIÓN: Evita el Stale Snapshot
         cursor = self.conexion_bd.cursor()
         cursor.execute("SELECT 1 FROM insumos WHERE clave_runa = %s", (clave_runa,))
         existe = cursor.fetchone() is not None
@@ -27,6 +28,7 @@ class InsumoModel:
         Recupera el listado completo de insumos activos con sus categorías.
         Llamada por: cargar_datos (vía Controlador)
         """
+        self.conexion_bd.commit() # CORRECCIÓN: Evita el Stale Snapshot
         cursor = self.conexion_bd.cursor(dictionary=True)
         consulta = """
             SELECT i.titulo AS 'Titulo', 
@@ -49,6 +51,7 @@ class InsumoModel:
         Busca un insumo específico mediante su clave RUNA.
         Llamada por: intentar_cargar_edicion (vía Controlador)
         """
+        self.conexion_bd.commit() # CORRECCIÓN: Evita el Stale Snapshot
         cursor = self.conexion_bd.cursor(dictionary=True)
         consulta = """
             SELECT titulo, id_tipo_insumo, estado, fecha_adquisicion, clave_runa

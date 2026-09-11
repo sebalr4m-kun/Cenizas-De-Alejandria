@@ -7,7 +7,7 @@ from PySide6.QtWidgets import QMessageBox
 
 from Modulos.Config import Conexion
 from Modulos.Views.InsumoViews import VistaTablaInsumo, FormularioInsumo
-
+from Modulos.Auditorias import auditoria_global
 
 class ControladorInsumo(QObject):
     """
@@ -23,6 +23,10 @@ class ControladorInsumo(QObject):
         self.bd = self.conexion_obj.obtener_conexion()
         self.ctrl_param = None
 
+        # CORRECCIÓN MVC: Actúa como su propio modelo temporalmente 
+        # para evitar que las vistas externas colapsen al llamar a self.ctrl.model
+        self.model = self 
+
         # Referencias a las vistas (Lazy loading)
         self.widget_vista = None
         self.widget_formulario = None
@@ -33,6 +37,7 @@ class ControladorInsumo(QObject):
     # ====================== LÓGICA DE BASE DE DATOS ======================
 
     def verificar_existencia_runa(self, clave_runa):
+        self.bd.commit() # CORRECCIÓN: Evitar Stale Snapshot
         cursor = self.bd.cursor()
         try:
             cursor.execute("SELECT 1 FROM insumos WHERE clave_runa = %s", (clave_runa,))
@@ -55,6 +60,7 @@ class ControladorInsumo(QObject):
 
     def obtener_todos(self):
         """Recupera todos los insumos activos."""
+        self.bd.commit() # CORRECCIÓN: Refrescar transacción para evitar Stale Snapshot
         cursor = self.bd.cursor(dictionary=True)
         consulta = """
             SELECT i.titulo AS 'Titulo', 
@@ -79,6 +85,7 @@ class ControladorInsumo(QObject):
             cursor.close()
 
     def obtener_uno(self, clave_runa):
+        self.bd.commit() # CORRECCIÓN: Refrescar transacción para evitar Stale Snapshot
         cursor = self.bd.cursor(dictionary=True)
         try:
             cursor.execute("SELECT * FROM insumos WHERE clave_runa=%s", (clave_runa,))
@@ -96,15 +103,17 @@ class ControladorInsumo(QObject):
                     WHERE clave_runa=%s
                 """
                 cursor.execute(consulta, (estado, titulo, id_tipo, fecha, clave_runa))
+                auditoria_global.auditar_accion(2, "Insumos", f"Actualización de insumo RUNA: {clave_runa}")
             else:
                 consulta = """
                     INSERT INTO insumos (titulo, id_tipo_insumo, estado, fecha_adquisicion, clave_runa)
                     VALUES (%s, %s, %s, %s, %s)
                 """
                 cursor.execute(consulta, (titulo, id_tipo, estado, fecha, clave_runa))
+                auditoria_global.auditar_accion(1, "Insumos", f"Creación de insumo RUNA: {clave_runa}")
 
             self.bd.commit()
-            self.insumo_actualizado.emit()  # Emitir señal después de guardar
+            self.insumo_actualizado.emit()
         except Exception as e:
             self.bd.rollback()
             raise e
@@ -115,6 +124,7 @@ class ControladorInsumo(QObject):
         cursor = self.bd.cursor()
         try:
             cursor.execute("DELETE FROM insumos WHERE clave_runa=%s", (clave_runa,))
+            auditoria_global.auditar_accion(4, "Insumos", f"Borrado físico de insumo RUNA: {clave_runa}")
             self.bd.commit()
         except Exception as e:
             self.bd.rollback()
@@ -136,8 +146,8 @@ class ControladorInsumo(QObject):
             self._esta_cargando = True
             if self.widget_vista:
                 datos = self.obtener_todos()
-                self.widget_vista.actualizar_datos(datos)   # ← Llama a la vista
-                self.datos_actualizados.emit()
+                self.widget_vista.actualizar_datos(datos)
+                # CORRECCIÓN: Se eliminó self.datos_actualizados.emit() aquí para romper el bucle infinito de recarga
         finally:
             self._esta_cargando = False
 
@@ -184,13 +194,13 @@ class ControladorInsumo(QObject):
 
         if not titulo or id_tipo is None:
             QMessageBox.warning(None, "Validación", "El Título y la Categoría son campos obligatorios.")
-            return
+            return False # CORRECCIÓN: Retorno explícito
 
         if modo == 'crear':
             if self.es_libro(id_tipo):
                 QMessageBox.warning(None, "Restricción de Flujo",
                                    "Los Libros deben gestionarse exclusivamente desde el módulo 'Libros (Clase)'.")
-                return
+                return False # CORRECCIÓN: Retorno explícito
 
             fecha_adq = datetime.date.today().strftime("%Y-%m-%d")
             try:
@@ -198,17 +208,19 @@ class ControladorInsumo(QObject):
                 self.guardar_bd(titulo, id_tipo, fecha_adq, "DISPONIBLE", clave_runa, False)
                 QMessageBox.information(None, "Éxito", f"Insumo registrado con éxito.\nRUNA: {clave_runa}")
                 self.finalizar_accion()
+                return True # CORRECCIÓN: Retorno verdadero para que la vista limpie el formulario
             except Exception as e:
                 QMessageBox.critical(None, "Error de Base de Datos", str(e))
+                return False
 
         else:  # MODO EDICIÓN
             clave_runa = datos.get('clave_runa')
             if not clave_runa:
-                return
+                return False
 
             item_original = self.obtener_uno(clave_runa)
             if not item_original:
-                return
+                return False
 
             estado_frontend = datos.get('estado_ui')
             es_un_libro = self.es_libro(item_original.get('id_tipo_insumo'))
@@ -229,8 +241,10 @@ class ControladorInsumo(QObject):
                                           "Los datos del insumo han sido actualizados.")
 
                 self.finalizar_accion()
+                return True # CORRECCIÓN: Retorno verdadero para confirmar ejecución exitosa
             except Exception as e:
                 QMessageBox.critical(None, "Error en Actualización", str(e))
+                return False
 
     def finalizar_accion(self):
         """Disparador maestro después de guardar o eliminar"""
@@ -240,7 +254,7 @@ class ControladorInsumo(QObject):
                 self.widget_formulario.limpiar()
                 self.widget_formulario.widget_contenido.hide()
 
-            self.datos_actualizados.emit()         # Notifica a MainWindow
+            self.datos_actualizados.emit()         # Notifica a MainWindow de forma segura
 
         except Exception as e:
             print(f"Error en finalizar_accion de Insumo: {e}")
