@@ -1,80 +1,119 @@
-from PySide6.QtCore import Qt, Signal, QObject 
+import string
+import random
+import datetime
+
+from PySide6.QtCore import Qt, Signal, QObject
+from PySide6.QtWidgets import QMessageBox
+
 from Modulos.Config import Conexion
 from Modulos.Views.InsumoViews import VistaTablaInsumo, FormularioInsumo
-from PySide6.QtWidgets import QMessageBox
-import random
-import string
+from Modulos.Auditorias import auditoria_global
 
-class ControladorInsumo(QObject): 
+class ControladorInsumo(QObject):
+    """
+    Controlador central para el módulo de Insumos.
+    Solo maneja lógica de negocio y datos. No toca UI directamente.
+    """
     datos_actualizados = Signal()
+    insumo_actualizado = Signal()
 
     def __init__(self):
         super().__init__()
-        self.bd = Conexion().obtener_conexion()
+        self.conexion_obj = Conexion()
+        self.bd = self.conexion_obj.obtener_conexion()
         self.ctrl_param = None
-        
+
+        # CORRECCIÓN MVC: Actúa como su propio modelo temporalmente 
+        # para evitar que las vistas externas colapsen al llamar a self.ctrl.model
+        self.model = self 
+
         # Referencias a las vistas (Lazy loading)
         self.widget_vista = None
         self.widget_formulario = None
-        
-    # --- LÓGICA DE BASE DE DATOS Y ABM ---
-    
+
+        # Bandera para evitar recursión
+        self._esta_cargando = False
+
+    # ====================== LÓGICA DE BASE DE DATOS ======================
+
     def verificar_existencia_runa(self, clave_runa):
+        self.bd.commit() # CORRECCIÓN: Evitar Stale Snapshot
         cursor = self.bd.cursor()
-        cursor.execute("SELECT 1 FROM insumos WHERE clave_runa = %s", (clave_runa,))
-        existe = cursor.fetchone() is not None
-        cursor.close()
-        return existe
+        try:
+            cursor.execute("SELECT 1 FROM insumos WHERE clave_runa = %s", (clave_runa,))
+            existe = cursor.fetchone() is not None
+            return existe
+        except Exception as e:
+            print(f"Error en verificación de RUNA: {e}")
+            return False
+        finally:
+            cursor.close()
 
     def generar_runa_unica(self):
         caracteres = string.ascii_uppercase
         longitud = 5
-        for _ in range(100): 
+        for _ in range(100):
             runa = ''.join(random.choice(caracteres) for _ in range(longitud))
             if not self.verificar_existencia_runa(runa):
                 return runa
-        raise Exception("No se pudo generar una Clave RUNA única.")
+        raise Exception("Falla crítica: No se pudo generar una Clave RUNA única tras 100 intentos.")
 
     def obtener_todos(self):
+        """Recupera todos los insumos activos."""
+        self.bd.commit() # CORRECCIÓN: Refrescar transacción para evitar Stale Snapshot
         cursor = self.bd.cursor(dictionary=True)
         consulta = """
             SELECT i.titulo AS 'Titulo', 
-                i.clave_runa AS 'Clave RUNA', 
-                COALESCE(t.nombre, 'Sin categoría') AS Categoria,
-                i.estado AS Estado, 
-                DATE_FORMAT(i.fecha_adquisicion, '%Y-%m-%d') AS Adquisicion,
-                i.id_tipo_insumo
+                   i.clave_runa AS 'Clave RUNA', 
+                   COALESCE(t.nombre, 'Sin categoría') AS Categoria,
+                   i.estado AS Estado, 
+                   DATE_FORMAT(i.fecha_adquisicion, '%Y-%m-%d') AS Adquisicion,
+                   i.id_tipo_insumo
             FROM insumos i
             LEFT JOIN param_tipos_insumo t ON i.id_tipo_insumo = t.id_tipo_insumo
             WHERE i.estado != 'INACTIVA' 
             ORDER BY i.titulo
         """
-        cursor.execute(consulta)
-        res = cursor.fetchall()
-        cursor.close()
-        return res
+        try:
+            cursor.execute(consulta)
+            res = cursor.fetchall()
+            return res
+        except Exception as e:
+            print(f"Error al obtener insumos: {e}")
+            return []
+        finally:
+            cursor.close()
 
     def obtener_uno(self, clave_runa):
+        self.bd.commit() # CORRECCIÓN: Refrescar transacción para evitar Stale Snapshot
         cursor = self.bd.cursor(dictionary=True)
-        cursor.execute("SELECT * FROM insumos WHERE clave_runa=%s", (clave_runa,))
-        res = cursor.fetchone()
-        cursor.close()
-        return res
+        try:
+            cursor.execute("SELECT * FROM insumos WHERE clave_runa=%s", (clave_runa,))
+            return cursor.fetchone()
+        finally:
+            cursor.close()
 
     def guardar_bd(self, titulo, id_tipo, fecha, estado, clave_runa, es_actualizacion):
         cursor = self.bd.cursor()
         try:
             if es_actualizacion:
-                cursor.execute("""
-                    UPDATE insumos SET estado=%s, titulo=%s, id_tipo_insumo=%s, fecha_adquisicion=%s
+                consulta = """
+                    UPDATE insumos 
+                    SET estado=%s, titulo=%s, id_tipo_insumo=%s, fecha_adquisicion=%s
                     WHERE clave_runa=%s
-                """, (estado, titulo, id_tipo, fecha, clave_runa))
+                """
+                cursor.execute(consulta, (estado, titulo, id_tipo, fecha, clave_runa))
+                auditoria_global.auditar_accion(2, "Insumos", f"Actualización de insumo RUNA: {clave_runa}")
             else:
-                cursor.execute("""
+                consulta = """
                     INSERT INTO insumos (titulo, id_tipo_insumo, estado, fecha_adquisicion, clave_runa)
                     VALUES (%s, %s, %s, %s, %s)
-                """, (titulo, id_tipo, estado, fecha, clave_runa))
+                """
+                cursor.execute(consulta, (titulo, id_tipo, estado, fecha, clave_runa))
+                auditoria_global.auditar_accion(1, "Insumos", f"Creación de insumo RUNA: {clave_runa}")
+
             self.bd.commit()
+            self.insumo_actualizado.emit()
         except Exception as e:
             self.bd.rollback()
             raise e
@@ -85,22 +124,32 @@ class ControladorInsumo(QObject):
         cursor = self.bd.cursor()
         try:
             cursor.execute("DELETE FROM insumos WHERE clave_runa=%s", (clave_runa,))
+            auditoria_global.auditar_accion(4, "Insumos", f"Borrado físico de insumo RUNA: {clave_runa}")
             self.bd.commit()
         except Exception as e:
             self.bd.rollback()
             raise e
         finally:
             cursor.close()
-    
+
     def es_libro(self, id_tipo):
         return id_tipo == 3
 
-    # --- MÉTODOS DE INTEGRACIÓN (PUENTE) ---
+    # ====================== MÉTODOS DE VISTA ======================
 
     def cargar_datos(self):
-        if self.widget_vista:
-            datos = self.obtener_todos()
-            self.widget_vista.actualizar_datos(datos)
+        """Obtiene los datos y le pide a la vista que los muestre"""
+        if self._esta_cargando:
+            return
+
+        try:
+            self._esta_cargando = True
+            if self.widget_vista:
+                datos = self.obtener_todos()
+                self.widget_vista.actualizar_datos(datos)
+                # CORRECCIÓN: Se eliminó self.datos_actualizados.emit() aquí para romper el bucle infinito de recarga
+        finally:
+            self._esta_cargando = False
 
     def obtener_widget_vista(self):
         if not self.widget_vista:
@@ -112,8 +161,10 @@ class ControladorInsumo(QObject):
         self.ctrl_param = ctrl_param
         if not self.widget_formulario:
             self.widget_formulario = FormularioInsumo(self)
-            # FIX: Corregido el nombre de la señal de 'parameter_guardado' a 'parametro_guardado'
-            self.ctrl_param.parametro_guardado.connect(self.cargar_combos)
+
+            if hasattr(self.ctrl_param, 'parametro_guardado'):
+                self.ctrl_param.parametro_guardado.connect(self.cargar_combos)
+
             self.cargar_combos()
         return self.widget_formulario
 
@@ -123,68 +174,91 @@ class ControladorInsumo(QObject):
             self.widget_formulario.establecer_modo('crear', inicial=True)
 
     def cargar_combos(self):
-        if not self.ctrl_param or not self.widget_formulario: return
-        self.widget_formulario.combo_cat.clear()
-        
-        # Obtenemos la lista de activos desde el modelo del controlador de parámetros
-        cats = self.ctrl_param.model.obtener_lista_activos("Tipo Insumo")
-        
-        for c in cats:
-            self.widget_formulario.combo_cat.addItem(c['nombre'], c['id']) 
+        if not self.ctrl_param or not self.widget_formulario:
+            return
+
+        try:
+            self.widget_formulario.combo_cat.clear()
+            cats = self.ctrl_param.model.obtener_lista_activos("Tipo Insumo")
+            for c in cats:
+                self.widget_formulario.combo_cat.addItem(c['nombre'], c['id'])
+        except Exception as e:
+            print(f"Error al cargar combos de insumos: {e}")
+
+    # ====================== MANEJADOR PRINCIPAL ======================
 
     def manejar_guardado(self, datos):
-        modo = datos['modo']
-        titulo = datos['titulo']
-        id_tipo = datos['id_tipo']
-        
+        modo = datos.get('modo', 'crear')
+        titulo = datos.get('titulo')
+        id_tipo = datos.get('id_tipo')
+
         if not titulo or id_tipo is None:
-            QMessageBox.warning(None, "Error", "Título y Categoría requeridos")
-            return
-            
+            QMessageBox.warning(None, "Validación", "El Título y la Categoría son campos obligatorios.")
+            return False # CORRECCIÓN: Retorno explícito
+
         if modo == 'crear':
             if self.es_libro(id_tipo):
-                QMessageBox.warning(None, "Error", "No se pueden crear libros aquí. Use el módulo 'Libros'.")
-                return
+                QMessageBox.warning(None, "Restricción de Flujo",
+                                   "Los Libros deben gestionarse exclusivamente desde el módulo 'Libros (Clase)'.")
+                return False # CORRECCIÓN: Retorno explícito
 
-            import datetime
             fecha_adq = datetime.date.today().strftime("%Y-%m-%d")
             try:
                 clave_runa = self.generar_runa_unica()
                 self.guardar_bd(titulo, id_tipo, fecha_adq, "DISPONIBLE", clave_runa, False)
-                QMessageBox.information(None, "Éxito", f"Insumo creado: {clave_runa}")
+                QMessageBox.information(None, "Éxito", f"Insumo registrado con éxito.\nRUNA: {clave_runa}")
                 self.finalizar_accion()
+                return True # CORRECCIÓN: Retorno verdadero para que la vista limpie el formulario
             except Exception as e:
-                QMessageBox.critical(None, "Error", str(e))
-                
-        else: # MODO EDICIÓN
-            clave_runa = datos['clave_runa']
-            if not clave_runa: return
+                QMessageBox.critical(None, "Error de Base de Datos", str(e))
+                return False
 
-            item = self.obtener_uno(clave_runa)
-            if not item: return
-            
-            estado_frontend = datos['estado_ui']
-            es_libro = self.es_libro(item.get('id_tipo_insumo'))
-            
-            titulo_guardar = item.get('titulo') if es_libro else titulo
-            id_tipo_guardar = item.get('id_tipo_insumo') if es_libro else id_tipo
-            fecha_guardar = item.get('fecha_adquisicion') if es_libro else datos['fecha_ui']
+        else:  # MODO EDICIÓN
+            clave_runa = datos.get('clave_runa')
+            if not clave_runa:
+                return False
+
+            item_original = self.obtener_uno(clave_runa)
+            if not item_original:
+                return False
+
+            estado_frontend = datos.get('estado_ui')
+            es_un_libro = self.es_libro(item_original.get('id_tipo_insumo'))
+
+            titulo_final = item_original.get('titulo') if es_un_libro else titulo
+            id_tipo_final = item_original.get('id_tipo_insumo') if es_un_libro else id_tipo
+            fecha_final = item_original.get('fecha_adquisicion') if es_un_libro else datos.get('fecha_ui')
 
             try:
                 if estado_frontend == 'ELIMINADA':
                     self.eliminar_fisico(clave_runa)
-                    QMessageBox.information(None, "Info", "Eliminado físicamente.")
+                    QMessageBox.information(None, "Registro Eliminado",
+                                          f"El insumo {clave_runa} ha sido borrado físicamente.")
                 else:
                     estado_bd = "INACTIVA" if estado_frontend == 'SUSPENDIDA' else estado_frontend
-                    self.guardar_bd(titulo_guardar, id_tipo_guardar, fecha_guardar, estado_bd, clave_runa, True) 
-                    QMessageBox.information(None, "Info", f"Actualizado.")
-                
+                    self.guardar_bd(titulo_final, id_tipo_final, fecha_final, estado_bd, clave_runa, True)
+                    QMessageBox.information(None, "Actualización exitosa",
+                                          "Los datos del insumo han sido actualizados.")
+
                 self.finalizar_accion()
+                return True # CORRECCIÓN: Retorno verdadero para confirmar ejecución exitosa
             except Exception as e:
-                QMessageBox.critical(None, "Error", str(e))
+                QMessageBox.critical(None, "Error en Actualización", str(e))
+                return False
 
     def finalizar_accion(self):
-        self.datos_actualizados.emit()
+        """Disparador maestro después de guardar o eliminar"""
+        try:
+            self.cargar_datos()                    # Actualiza su propia vista
+            if self.widget_formulario:
+                self.widget_formulario.limpiar()
+                self.widget_formulario.widget_contenido.hide()
+
+            self.datos_actualizados.emit()         # Notifica a MainWindow de forma segura
+
+        except Exception as e:
+            print(f"Error en finalizar_accion de Insumo: {e}")
+            
+    def forzar_refresco_total(self):
         self.cargar_datos()
-        if self.widget_formulario:
-            self.widget_formulario.limpiar()
+        self.cargar_combos()

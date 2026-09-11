@@ -1,5 +1,6 @@
+import sys
 from PySide6.QtWidgets import QMessageBox
-from Modulos.Models.InicioSesionModels import LoginModel
+from Modulos.Models.InicioSesionModel import LoginModel
 from Modulos.Views.InicioSesionViews import VistaLogin
 from Modulos.PasswordRecover import ValidadorRecuperacion
 
@@ -8,32 +9,46 @@ class ControladorLogin:
         self.model = LoginModel()
         self.vista = VistaLogin()
 
-        # Datos de salida
-        self.rol = "ninguno"
-        self.nombre_usuario = ""
+        self.pasaporte = None
         self.autenticado = False
 
-        # Conectar señales de la vista
         self.vista.botones.accepted.connect(self.intentar_login)
         self.vista.botones.rejected.connect(self.vista.reject)
-        self.vista.boton_invitado.clicked.connect(self.aceptar_invitado)
         self.vista.btn_recuperar.clicked.connect(self.ejecutar_recuperacion)
 
+    def _generar_pasaporte_omnipotente(self, nombre="Administrador (Modo Desarrollo)"):
+        return {
+            'id_usuario': 0,
+            'nombre': nombre,
+            'rol': 'admin',
+            'admitido': True,
+            'permisos': {
+                "Usuarios": {"ver": True, "crear": True, "editar": True, "eliminar": True, "borrar": True},
+                "Insumos": {"ver": True, "crear": True, "editar": True, "eliminar": True, "borrar": True},
+                "Libros": {"ver": True, "crear": True, "editar": True, "eliminar": True, "borrar": True},
+                "Prestamos": {"ver": True, "crear": True, "editar": True, "eliminar": True, "borrar": True},
+                "Parametros": {"ver": True, "crear": True, "editar": True, "eliminar": True, "borrar": True}
+            }
+        }
+
     def ejecutar(self):
-        """Muestra el diálogo y devuelve si se autenticó o no"""
-        # === Chequeo automático del Modo Admin ANTES de mostrar el login ===
-        if not self.model.hay_bibliotecario_activo():
+        estado_ddlm = self.model.hay_dios_de_la_maquina_activo()
+        
+        if estado_ddlm is None:
+            QMessageBox.critical(None, "Error de Conexión", "No se detecta conexión a la base de datos. Encienda MySQL e intente nuevamente.")
+            return False
+            
+        # Validación original del Modo de Rescate
+        if not estado_ddlm:
             QMessageBox.information(
                 None, 
-                "Modo Config", 
-                "No hay bibliotecario. Modo admin activado."
+                "Modo de Rescate / Configuración", 
+                "No se detectaron usuarios ADMItidos con privilegios de gestión (Dios de la Máquina).\\n\\nSe ha activado el Modo Administrador con acceso total por seguridad."
             )
-            self.rol = "admin"
-            self.nombre_usuario = "Administrador (Modo Desarrollo)"
+            self.pasaporte = self._generar_pasaporte_omnipotente()
             self.autenticado = True
-            return True  # ← Simula que el login fue exitoso
+            return True
 
-        # Si hay bibliotecarios, mostramos el diálogo normal
         return self.vista.exec()
 
     def intentar_login(self):
@@ -44,11 +59,10 @@ class ControladorLogin:
             QMessageBox.warning(self.vista, "Error", "Por favor, complete todos los campos.")
             return
 
-        usuario = self.model.verificar_credenciales(correo, password)
+        pasaporte_validado = self.model.verificar_credenciales(correo, password)
 
-        if usuario:
-            self.rol = usuario['rol']
-            self.nombre_usuario = usuario['nombre']
+        if pasaporte_validado:
+            self.pasaporte = pasaporte_validado
             self.autenticado = True
             self.vista.accept()
         else:
@@ -57,16 +71,18 @@ class ControladorLogin:
     def ejecutar_recuperacion(self):
         validador = ValidadorRecuperacion(self.vista)
         if validador.exec():
-            self.rol = "admin"
-            self.nombre_usuario = "Recuperado_Por_Llave"
-            self.autenticado = True
-            self.vista.accept()
-
-    def aceptar_invitado(self):
-        self.rol = "invitado"
-        self.nombre_usuario = "Invitado"
-        self.autenticado = True
-        self.vista.accept()
+            # En lugar de asignar privilegios de "Dios de la Máquina", extraemos el pasaporte
+            # real del usuario que el validador ya ha certificado mediante las llaves secretas.
+            if hasattr(validador, 'pasaporte') and validador.pasaporte:
+                self.pasaporte = validador.pasaporte
+                self.autenticado = True
+                self.vista.accept()
+            else:
+                QMessageBox.critical(
+                    self.vista, 
+                    "Error de Integridad", 
+                    "Las llaves fueron correctas, pero el validador no expuso el pasaporte de sesión del usuario. Asegúrate de que ValidadorRecuperacion defina 'self.pasaporte' con los permisos reales al tener éxito."
+                )
 
     def obtener_resultado(self):
-        return self.rol, self.nombre_usuario
+        return self.pasaporte

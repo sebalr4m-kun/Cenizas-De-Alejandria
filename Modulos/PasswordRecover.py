@@ -1,7 +1,12 @@
 import random
+import socket
+import smtplib
+import json
+from email.mime.text import MIMEText
+from datetime import datetime, timedelta
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
-    QLineEdit, QPushButton, QMessageBox
+    QLineEdit, QPushButton, QMessageBox, QApplication
 )
 from PySide6.QtCore import Qt
 from Modulos.Config import Conexion
@@ -9,161 +14,295 @@ from Modulos.Config import Conexion
 class ValidadorRecuperacion(QDialog):
     def __init__(self, padre=None):
         super().__init__(padre)
-        self.setWindowTitle("VALIDACIÓN DE IDENTIDAD - BIBLIOTECARIO")
-        self.setFixedSize(400, 350)
+        self.setWindowTitle("SEGURIDAD - CENIZAS DE ALEJANDRÍA")
+        self.setFixedSize(460, 560)
         self.setModal(True)
         self.bd = Conexion().obtener_conexion()
         
-        # Variables de control
         self.id_usuario_local = None
-        self.palabras_correctas = {} # Guardará {posicion: palabra}
+        self.email_usuario = None
+        self.palabras_correctas = {} 
+        self.expiracion_token = None
+        self.metodo_online = False
+        self.intentos_fallidos = 0 
+        self.pasaporte = None 
         
+        self.aplicar_estilos_vanta()
         self.init_ui()
+
+    def aplicar_estilos_vanta(self):
+        self.setStyleSheet("""
+            QDialog {
+                background-color: #FFFFFF;
+                color: #000000;
+                font-family: 'Segoe UI', Arial, sans-serif;
+            }
+            QLabel {
+                color: #000000;
+                font-size: 15px;
+                font-weight: 700;
+                margin-top: 5px;
+            }
+            QLineEdit {
+                background-color: #FFFFFF;
+                color: #000000;
+                border: 2px solid #000000;
+                border-radius: 4px;
+                padding: 12px; 
+                font-size: 16px;
+                font-weight: 600;
+                min-height: 25px; 
+            }
+            QLineEdit:focus {
+                border: 3px solid #2980B9;
+                background-color: #F0F7FF;
+            }
+            QPushButton {
+                background-color: #2980B9;
+                color: #000000;
+                border-radius: 5px;
+                padding: 14px;
+                font-size: 15px;
+                font-weight: 900;
+                border: 2px solid #000000;
+            }
+            #btnConfirmar {
+                background-color: #27AE60;
+                color: #000000;
+            }
+            #btnConfirmar:hover {
+                background-color: #2ECC71;
+            }
+            #btnConfirmar:disabled {
+                background-color: #BDC3C7;
+                color: #444444;
+                border: 2px solid #7F8C8D;
+            }
+        """)
+
+    def verificar_conexion(self):
+        try:
+            socket.setdefaulttimeout(3)
+            socket.socket(socket.AF_INET, socket.SOCK_STREAM).connect(("8.8.8.8", 53))
+            return True
+        except socket.error:
+            return False
 
     def init_ui(self):
         self.layout_principal = QVBoxLayout(self)
+        self.layout_principal.setContentsMargins(45, 40, 45, 40)
+        self.layout_principal.setSpacing(8)
 
-        # --- FASE 1: IDENTIFICACIÓN ---
-        self.etiqueta_instruccion = QLabel("Introduzca su correo electrónico para iniciar el desafío:")
-        self.etiqueta_instruccion.setWordWrap(True)
+        self.lbl_titulo = QLabel("VERIFICACIÓN DE IDENTIDAD")
+        self.lbl_titulo.setStyleSheet("font-size: 22px; font-weight: 900; color: #000000; margin-bottom: 25px;")
+        self.lbl_titulo.setAlignment(Qt.AlignCenter)
+        self.layout_principal.addWidget(self.lbl_titulo)
+
+        self.etiqueta_instruccion = QLabel("Correo de la Cuenta Admitida:")
         self.layout_principal.addWidget(self.etiqueta_instruccion)
 
         self.entrada_email = QLineEdit()
-        self.entrada_email.setPlaceholderText("correo@ejemplo.com")
+        self.entrada_email.setPlaceholderText("usuario@ejemplo.com")
         self.layout_principal.addWidget(self.entrada_email)
 
-        self.btn_verificar_mail = QPushButton("Verificar Identidad")
+        self.btn_verificar_mail = QPushButton("Validar Cuenta")
+        self.btn_verificar_mail.setCursor(Qt.PointingHandCursor)
         self.btn_verificar_mail.clicked.connect(self.preparar_desafio)
         self.layout_principal.addWidget(self.btn_verificar_mail)
 
-        # --- FASE 2: EL DESAFÍO (Oculto al inicio) ---
         self.contenedor_desafio = QVBoxLayout()
-        self.inputs_desafio = {} # Para guardar los QLineEdit de las palabras
-
         self.layout_principal.addLayout(self.contenedor_desafio)
 
-        self.btn_validar_desafio = QPushButton("Confirmar Palabras")
+        self.btn_validar_desafio = QPushButton("Confirmar Credenciales")
+        self.btn_validar_desafio.setObjectName("btnConfirmar")
+        self.btn_validar_desafio.setCursor(Qt.PointingHandCursor)
         self.btn_validar_desafio.clicked.connect(self.verificar_respuestas)
         self.btn_validar_desafio.hide()
-        self.btn_validar_desafio.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold;")
+        self.btn_validar_desafio.setEnabled(False) 
         self.layout_principal.addWidget(self.btn_validar_desafio)
 
     def preparar_desafio(self):
-        email = self.entrada_email.text().strip()
-        if not email: return
+        self.email_usuario = self.entrada_email.text().strip()
+        if not self.email_usuario: 
+            QMessageBox.warning(self, "Error", "Ingrese un correo.")
+            return
+
+        self.btn_verificar_mail.setEnabled(False)
+        self.btn_verificar_mail.setText("Comprobando...")
+        QApplication.processEvents() 
 
         cursor = self.bd.cursor(dictionary=True)
         try:
-            # 1. Buscar si el usuario existe y es bibliotecario
-            query_user = """
+            query = """
                 SELECT u.id_usuario FROM usuarios u
                 JOIN param_tipos_usuario p ON u.id_tipo_usuario = p.id_tipo_usuario
-                WHERE u.email = %s AND p.nombre = 'Bibliotecario'
+                WHERE u.email = %s AND p.admitido = 1
             """
-            cursor.execute(query_user, (email,))
+            cursor.execute(query, (self.email_usuario,))
             usuario = cursor.fetchone()
 
             if not usuario:
-                QMessageBox.warning(self, "Error", "Correo no reconocido o no tiene privilegios de Bibliotecario.")
+                QMessageBox.critical(self, "Acceso Denegado", "El correo ingresado no pertenece a una cuenta admitida para este proceso.")
+                self.btn_verificar_mail.setEnabled(True)
+                self.btn_verificar_mail.setText("Validar Cuenta")
                 return
 
             self.id_usuario_local = usuario['id_usuario']
-
-            # 2. Obtener los 12 índices
-            cursor.execute("SELECT indices_palabras FROM seguridad_recuperacion WHERE id_usuario = %s", (self.id_usuario_local,))
-            resultado = cursor.fetchone()
             
-            if not resultado:
-                QMessageBox.critical(self, "Error Crítico", "No se encontraron llaves de recuperación para este usuario.")
-                return
-
-            indices = [int(i.strip()) for i in resultado['indices_palabras'].split(",")]
-
-            # 3. Elegir 3 posiciones únicas (0 a 11)
-            posiciones_elegidas = random.sample(range(12), 3)
-            posiciones_elegidas.sort()
-
-            # 4. Traducir esas 3 posiciones a palabras reales
-            for pos in posiciones_elegidas:
-                id_palabra_bd = indices[pos]
-                cursor.execute("SELECT palabra FROM param_diccionario_seguridad WHERE id_palabra = %s", (id_palabra_bd,))
-                palabra = cursor.fetchone()['palabra']
-                self.palabras_correctas[pos + 1] = palabra # Guardamos posición humana (1-12)
-
-            # 5. Cambiar la interfaz al modo desafío
-            self.mostrar_interfaz_desafio()
+            if self.verificar_conexion():
+                self.metodo_online = True
+                self.generar_desafio_email(cursor)
+            else:
+                self.metodo_online = False
+                self.generar_desafio_local(cursor)
 
         except Exception as e:
-            QMessageBox.critical(self, "Error de DB", str(e))
+            QMessageBox.critical(self, "Error", str(e))
+            self.btn_verificar_mail.setEnabled(True)
         finally:
             cursor.close()
 
-    def mostrar_interfaz_desafio(self):
-        # Limpiar y ocultar mail
+    def generar_desafio_email(self, cursor):
+        cursor.execute("SELECT indices_palabras FROM seguridad_recuperacion WHERE id_usuario = %s", (self.id_usuario_local,))
+        res = cursor.fetchone()
+        if not res:
+            self.generar_desafio_local(cursor)
+            return
+
+        indices = [int(i) for i in res['indices_palabras'].split(",")]
+        pos_elegidas = random.sample(range(12), 3)
+        pos_elegidas.sort()
+
+        palabras_a_enviar = []
+        for pos in pos_elegidas:
+            cursor.execute("SELECT palabra FROM param_diccionario_seguridad WHERE id_palabra = %s", (indices[pos],))
+            palabra = cursor.fetchone()['palabra']
+            self.palabras_correctas[pos + 1] = palabra
+            palabras_a_enviar.append(f"{pos + 1}. {palabra}")
+
+        self.expiracion_token = datetime.now() + timedelta(minutes=10)
+        
+        if self.enviar_correo(palabras_a_enviar):
+            self.mostrar_interfaz_desafio("CÓDIGO ENVIADO\nIngrese las posiciones indicadas:")
+        else:
+            self.generar_desafio_local(cursor)
+
+    def generar_desafio_local(self, cursor):
+        cursor.execute("SELECT indices_palabras FROM seguridad_recuperacion WHERE id_usuario = %s", (self.id_usuario_local,))
+        res = cursor.fetchone()
+        if not res:
+            QMessageBox.critical(self, "Error", "Sin llaves offline. Contacte a un administrador.")
+            self.btn_verificar_mail.setEnabled(True)
+            return
+
+        indices = [int(i) for i in res['indices_palabras'].split(",")]
+        pos_elegidas = random.sample(range(12), 3)
+        pos_elegidas.sort()
+
+        for pos in pos_elegidas:
+            cursor.execute("SELECT palabra FROM param_diccionario_seguridad WHERE id_palabra = %s", (indices[pos],))
+            self.palabras_correctas[pos + 1] = cursor.fetchone()['palabra']
+
+        self.mostrar_interfaz_desafio("MODO OFFLINE\nConsulte sus llaves físicas:")
+
+    def enviar_correo(self, lineas_palabras):
+        try:
+            remitente = "414nX4rd@gmail.com"
+            password = "lvjzabsitxrxwqmr" 
+            cuerpo = "Palabras de Recuperación RBAC:\n" + "\n".join(lineas_palabras)
+            
+            msg = MIMEText(cuerpo, 'plain', 'utf-8')
+            msg['Subject'] = "Seguridad de Acceso - Cenizas de Alejandría"
+            msg['From'] = remitente
+            msg['To'] = self.email_usuario
+            
+            with smtplib.SMTP_SSL('smtp.gmail.com', 465, local_hostname='localhost') as server:
+                server.login(remitente, password)
+                server.send_message(msg)
+            return True
+        except: 
+            return False
+
+    def mostrar_interfaz_desafio(self, mensaje):
         self.entrada_email.hide()
         self.btn_verificar_mail.hide()
-        self.etiqueta_instruccion.setText("Desafío de seguridad: Ingrese las palabras solicitadas de su lista de recuperación.")
+        self.etiqueta_instruccion.setText(mensaje)
+        self.etiqueta_instruccion.setStyleSheet("color: #000000; font-weight: 900; font-size: 16px; margin-bottom: 10px;")
 
-        # Crear los campos para las 3 palabras
+        self.inputs_desafio = {}
         for pos in self.palabras_correctas.keys():
-            lbl = QLabel(f"Palabra número {pos}:")
+            lbl = QLabel(f"Palabra {pos}:")
             edit = QLineEdit()
-            edit.setEchoMode(QLineEdit.Password) # Privacidad al escribir
+            if not self.metodo_online: edit.setEchoMode(QLineEdit.Password)
+            edit.textChanged.connect(self.validar_campos_completos)
             self.contenedor_desafio.addWidget(lbl)
             self.contenedor_desafio.addWidget(edit)
             self.inputs_desafio[pos] = edit
 
         self.btn_validar_desafio.show()
 
+    def validar_campos_completos(self):
+        completos = all(len(edit.text().strip()) > 0 for edit in self.inputs_desafio.values())
+        self.btn_validar_desafio.setEnabled(completos)
+
+    def construir_pasaporte(self):
+        cursor = self.bd.cursor(dictionary=True)
+        try:
+            query = """
+                SELECT u.id_usuario, u.nombre, p.nombre as rol, p.admitido, p.permisos 
+                FROM usuarios u
+                JOIN param_tipos_usuario p ON u.id_tipo_usuario = p.id_tipo_usuario
+                WHERE u.id_usuario = %s
+            """
+            cursor.execute(query, (self.id_usuario_local,))
+            datos = cursor.fetchone()
+            
+            if datos:
+                permisos_dict = {}
+                if datos['permisos']:
+                    if isinstance(datos['permisos'], str):
+                        try:
+                            permisos_dict = json.loads(datos['permisos'])
+                        except json.JSONDecodeError:
+                            pass
+                    else:
+                        permisos_dict = datos['permisos']
+                        
+                self.pasaporte = {
+                    'id_usuario': datos['id_usuario'],
+                    'nombre': datos['nombre'],
+                    'rol': datos['rol'],
+                    'admitido': bool(datos['admitido']),
+                    'permisos': permisos_dict
+                }
+        except Exception as e:
+            print(f"Error al construir el pasaporte: {e}")
+            self.pasaporte = None
+        finally:
+            cursor.close()
+
     def verificar_respuestas(self):
+        if self.metodo_online and datetime.now() > self.expiracion_token:
+            QMessageBox.warning(self, "Expirado", "El tiempo ha terminado.")
+            self.reject()
+            return
+
         aciertos = 0
         for pos, palabra_real in self.palabras_correctas.items():
             if self.inputs_desafio[pos].text().strip().lower() == palabra_real.lower():
                 aciertos += 1
         
         if aciertos == 3:
-            QMessageBox.information(self, "Éxito", "Identidad confirmada. Acceso concedido.")
-            self.accept() # Esto devuelve QDialog.Accepted (True)
+            self.construir_pasaporte()
+            QMessageBox.information(self, "Éxito", "Identidad confirmada. Redirigiendo al sistema...")
+            self.accept()
         else:
-            QMessageBox.warning(self, "Fallo de Seguridad", "Las palabras no coinciden. El proceso se cancelará.")
-            self.reject() # Esto devuelve QDialog.Rejected (False)
-
-# --- BLOQUE DE EJECUCIÓN INDEPENDIENTE ---
-if __name__ == "__main__":
-    import sys
-    from PySide6.QtWidgets import QApplication
-
-    app = QApplication(sys.argv)
-    
-    # Ajuste de contraste: Forzamos el color del texto a negro (#000000)
-    app.setStyleSheet("""
-        QWidget { 
-            background-color: #E0E0E0; 
-            color: #000000; 
-            font-family: 'Segoe UI'; 
-        }
-        QLabel { 
-            color: #000000; 
-        }
-        QPushButton { 
-            background-color: #8da9d8; 
-            color: #000000; 
-            padding: 8px; 
-            border-radius: 4px; 
-            font-weight: bold; 
-        }
-        QLineEdit { 
-            background-color: white; 
-            color: #000000; 
-            border: 1px solid #999999; 
-            padding: 5px; 
-        }
-    """)
-
-    ventana_prueba = ValidadorRecuperacion()
-    if ventana_prueba.exec():
-        print("Resultado: ÉXITO")
-    else:
-        print("Resultado: FALLO")
-    
-    sys.exit()
+            self.intentos_fallidos += 1
+            restantes = 3 - self.intentos_fallidos
+            
+            if restantes > 0:
+                QMessageBox.warning(self, "Error", f"Palabras incorrectas. Quedan {restantes} intentos.")
+                for edit in self.inputs_desafio.values(): edit.clear()
+            else:
+                QMessageBox.critical(self, "Bloqueo de Seguridad", "Demasiados intentos fallidos. Volviendo al inicio.")
+                self.reject()

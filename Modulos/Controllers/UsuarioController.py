@@ -1,87 +1,159 @@
+import re
+import json
 from PySide6.QtCore import Qt, QObject, Signal
-from PySide6.QtWidgets import QMessageBox, QTableWidgetItem
+from PySide6.QtWidgets import QTableWidgetItem, QMessageBox
 
-from Modulos.Views.UsuarioViews import VistaUsuario, VentanaEmergenciaRecuperacion
 from Modulos.Models.UsuarioModel import UsuarioModel
 from Modulos.Security.PasswordHasher import PasswordHasher
+from Modulos.AccountValidator import ValidadorCuenta
+from Modulos.Auditorias import auditoria_global
 
 class ControladorUsuario(QObject):
     datos_actualizados = Signal()
+    solicitar_notificacion = Signal(str, str, str, object)
 
     def __init__(self):
         super().__init__()
+        from Modulos.Views.UsuarioViews import VistaUsuario
         self.model = UsuarioModel()
         self.vista = VistaUsuario()
+        
+        self.vista.parent_controller = self
+        
         self.modo = 'crear'
         self.pass_actual_bd = ""
-        self.es_upgrade_a_bibliotecario = False
+        
+        self.es_upgrade_a_admitido = False
+        self._backup_usuario = None
+        self.sesion_actual = None
+        self.email_loggeado = None
         self.conectar_senales()
 
     def conectar_senales(self):
         v = self.vista
-        v.btn_modo_crear.clicked.connect(self.establecer_modo_crear)
+        self.solicitar_notificacion.connect(v.mostrar_notificacion)
+        
+        v.btn_modo_crear.clicked.connect(lambda: self.establecer_modo_crear(inicial=False))
         v.btn_modo_editar.clicked.connect(self.establecer_modo_editar)
         v.btn_guardar.clicked.connect(self.manejar_guardado)
-        v.btn_recuperar_pass.clicked.connect(self.proceso_recuperacion_emergencia)
         v.entrada_busqueda.textChanged.connect(self.filtrar_tabla)
         v.entrada_email.editingFinished.connect(self.al_terminar_edicion_email)
         v.entrada_pass_actual.textChanged.connect(self.verificar_pass_tiempo_real)
-        v.combo_tipo_cuenta.currentTextChanged.connect(self.alternar_contrasena)
 
-    # ==================== MÉTODOS DE UI ====================
+    def establecer_sesion_actual(self, pasaporte):
+        """
+        Recibe el pasaporte de la sesión actual y extrae el email del usuario loggeado
+        para poder imponer bloqueos estrictos de auto-edición de privilegios.
+        """
+        self.sesion_actual = pasaporte
+        self.email_loggeado = None
+
+        if self.sesion_actual and self.sesion_actual.get('id_usuario'):
+            bd = self.model.bd
+            bd.commit()
+            cursor = bd.cursor()
+            try:
+                cursor.execute("SELECT email FROM usuarios WHERE id_usuario = %s", (self.sesion_actual['id_usuario'],))
+                res = cursor.fetchone()
+                if res:
+                    self.email_loggeado = res[0]
+            except Exception as e:
+                print(f"[ERROR SEGURIDAD] No se pudo resolver el email de la sesión activa: {e}")
+            finally:
+                cursor.close()
+
+    def evaluar_bloqueo_autoedicion_rol(self):
+        if self.modo == 'editar':
+            email_en_edicion = self.vista.entrada_email.text().strip()
+            if self.email_loggeado and self.email_loggeado == email_en_edicion:
+                self.vista.combo_tipo_cuenta.setEnabled(False)
+                self.vista.combo_tipo_cuenta.setToolTip("Bloqueo de Seguridad: No tienes permitido cambiar tu propio rol. Esta acción requiere otro administrador loggeado.")
+            else:
+                self.vista.combo_tipo_cuenta.setEnabled(True)
+                self.vista.combo_tipo_cuenta.setToolTip("")
+        else:
+            self.vista.combo_tipo_cuenta.setEnabled(True)
+            self.vista.combo_tipo_cuenta.setToolTip("")
+
+    @property
+    def es_upgrade_a_bibliotecario(self):
+        return self.es_upgrade_a_admitido
+
+    @es_upgrade_a_bibliotecario.setter
+    def es_upgrade_a_bibliotecario(self, valor):
+        self.es_upgrade_a_admitido = valor
+
     def obtener_widget_vista(self):
-        return self.vista.construir_vista_listado()
+        self.cargar_datos()
+        return self.vista.widget_listado
 
     def obtener_widget_formulario(self, ctrl_param=None):
-        widget = self.vista.construir_vista_formulario()
         self.cargar_combos()
         self.establecer_modo_crear(inicial=True)
-        return widget
+        return self.vista.widget_formulario
 
     def reiniciar_visibilidad_formulario(self):
         self.establecer_modo_crear(inicial=True)
-        self.vista.widget_contenido_formulario.hide()
+        if hasattr(self.vista, 'widget_contenido_formulario'):
+            self.vista.widget_contenido_formulario.hide()
 
     def cargar_combos(self):
         try:
-            tipos = self.model._obtener_tipos_usuario_bd()
+            cursor = self.model.bd.cursor(dictionary=True)
+            cursor.execute("SELECT id_tipo_usuario, nombre, admitido FROM param_tipos_usuario WHERE estado = 'ACTIVO'")
+            tipos = cursor.fetchall()
+            cursor.close()
+
             self.vista.combo_tipo_cuenta.clear()
             for t in tipos:
-                self.vista.combo_tipo_cuenta.addItem(t['nombre'], t['id_tipo_usuario'])
+                icono = "🛡️ " if t.get('admitido') else "👤 "
+                nombre_visual = f"{icono}{t['nombre']}"
+                self.vista.combo_tipo_cuenta.addItem(nombre_visual, t['id_tipo_usuario'])
         except Exception as e:
-            QMessageBox.critical(None, "Error", f"Error cargando tipos: {e}")
+            self.solicitar_notificacion.emit('crit', "Error de Carga", f"Fallo al obtener tipos: {e}", None)
+
+    def _obtener_estados_admision(self):
+        id_actual = self.vista.combo_tipo_cuenta.currentData()
+        es_admitido = self.model.es_tipo_admitido(id_actual) if id_actual is not None else False
+        
+        id_orig = getattr(self.vista, 'id_rol_original', None)
+        fue_admitido = self.model.es_tipo_admitido(id_orig) if id_orig is not None else False
+                
+        return es_admitido, fue_admitido, id_actual, id_orig
 
     def establecer_modo_crear(self, inicial=False):
         self.modo = 'crear'
-        self.es_upgrade_a_bibliotecario = False
+        self.es_upgrade_a_admitido = False
+        self._backup_usuario = None
         self.vista.btn_modo_crear.setChecked(True)
         self.vista.btn_modo_editar.setChecked(False)
         self.vista.etiqueta_estado.hide()
         self.vista.combo_estado_cuenta.hide()
         self.limpiar_formulario()
-        self.alternar_contrasena("")
-        if not inicial:
+        if not inicial and hasattr(self.vista, 'widget_contenido_formulario'):
             self.vista.widget_contenido_formulario.show()
 
     def establecer_modo_editar(self):
         self.modo = 'editar'
-        self.es_upgrade_a_bibliotecario = False
+        self.es_upgrade_a_admitido = False
+        self._backup_usuario = None
         self.vista.btn_modo_crear.setChecked(False)
         self.vista.btn_modo_editar.setChecked(True)
         self.vista.etiqueta_estado.show()
         self.vista.combo_estado_cuenta.show()
         self.limpiar_formulario()
-        self.alternar_contrasena("")
-        self.vista.widget_contenido_formulario.show()
+        if hasattr(self.vista, 'widget_contenido_formulario'):
+            self.vista.widget_contenido_formulario.show()
 
     def limpiar_formulario(self):
-        """Reset TOTAL de todos los estados visuales"""
         self.vista.entrada_nombre.clear()
         self.vista.entrada_email.clear()
         self.vista.entrada_pass_actual.clear()
         self.vista.entrada_pass_nueva.clear()
         
-        # Reset explícito del botón y estilos
+        if hasattr(self.vista, 'entrada_pass_confirmar'):
+            self.vista.entrada_pass_confirmar.clear()
+            
         self.vista.btn_guardar.setEnabled(True)
         self.vista.btn_guardar.setStyleSheet("")
         self.vista.entrada_pass_actual.setStyleSheet("")
@@ -92,29 +164,12 @@ class ControladorUsuario(QObject):
         self.vista.combo_estado_cuenta.setCurrentIndex(0)
         
         self.pass_actual_bd = ""
-        self.es_upgrade_a_bibliotecario = False
-        self.restaurar_visibilidad_recovery()
+        self.es_upgrade_a_admitido = False
+        self._backup_usuario = None
+        self.vista._recovery_exitoso = False
+        self.vista.ajustar_visibilidad_campos_seguridad()
+        self.evaluar_bloqueo_autoedicion_rol()
 
-    def restaurar_visibilidad_recovery(self):
-        es_biblio = self.vista.combo_tipo_cuenta.currentText() == "Bibliotecario"
-        es_edit = self.modo == 'editar'
-        mostrar_antiguos = es_biblio and es_edit and not self.es_upgrade_a_bibliotecario
-        self.vista.etiqueta_pass_actual.setVisible(mostrar_antiguos)
-        self.vista.entrada_pass_actual.setVisible(mostrar_antiguos)
-        self.vista.btn_recuperar_pass.setVisible(mostrar_antiguos)
-
-    def alternar_contrasena(self, _=None):
-        es_biblio = self.vista.combo_tipo_cuenta.currentText() == "Bibliotecario"
-        es_edit = self.modo == 'editar'
-
-        if es_edit and es_biblio and not self.es_upgrade_a_bibliotecario:
-            self.es_upgrade_a_bibliotecario = True
-
-        self.vista.etiqueta_pass_nueva.setVisible(es_biblio)
-        self.vista.entrada_pass_nueva.setVisible(es_biblio)
-        self.restaurar_visibilidad_recovery()
-
-    # ==================== CARGA Y VALIDACIÓN ====================
     def cargar_datos(self):
         datos = self.model.obtener_todos()
         self.vista.tabla.setRowCount(0)
@@ -128,124 +183,291 @@ class ControladorUsuario(QObject):
     def filtrar_tabla(self, texto):
         texto = texto.lower()
         for i in range(self.vista.tabla.rowCount()):
-            match = any(texto in str(self.vista.tabla.item(i, j).text()).lower() for j in range(4) if self.vista.tabla.item(i, j))
+            match = any(texto in str(self.vista.tabla.item(i, j).text()).lower() 
+                        for j in range(4) if self.vista.tabla.item(i, j))
             self.vista.tabla.setRowHidden(i, not match)
 
     def verificar_pass_tiempo_real(self, texto=""):
-        if self.modo != 'editar' or self.vista.combo_tipo_cuenta.currentText() != "Bibliotecario" or self.es_upgrade_a_bibliotecario:
+        if self.modo != 'editar':
             self.vista.btn_guardar.setEnabled(True)
             self.vista.entrada_pass_actual.setStyleSheet("")
             return
-
+            
+        es_admitido, fue_admitido, _, _ = self._obtener_estados_admision()
+        recovery_exitoso = getattr(self.vista, '_recovery_exitoso', False)
+        requiere_validacion = False
+        
+        if fue_admitido and not recovery_exitoso:
+            requiere_validacion = True
+            
+        if not requiere_validacion:
+            self.vista.btn_guardar.setEnabled(True)
+            self.vista.entrada_pass_actual.setStyleSheet("")
+            return
+            
         if PasswordHasher.verify(texto, self.pass_actual_bd):
             self.vista.btn_guardar.setEnabled(True)
-            self.vista.btn_guardar.setStyleSheet("background-color: #4CAF50; color: white;")
-            self.vista.entrada_pass_actual.setStyleSheet("border: 2px solid green;")
+            self.vista.entrada_pass_actual.setStyleSheet("border: 2px solid #2ecc71;")
         else:
             self.vista.btn_guardar.setEnabled(False)
-            self.vista.btn_guardar.setStyleSheet("background-color: #cccccc;")
-            self.vista.entrada_pass_actual.setStyleSheet("border: 2px solid red;" if texto else "")
+            self.vista.entrada_pass_actual.setStyleSheet("border: 2px solid #e74c3c;" if texto else "")
 
     def al_terminar_edicion_email(self):
         if self.modo != 'editar': return
         email = self.vista.entrada_email.text().strip()
         if not email: return
-
+        
         usuario = self.model.obtener_por_email(email)
         if usuario:
             self.vista.entrada_nombre.setText(usuario['nombre'])
             self.pass_actual_bd = usuario.get('contraseña', '')
+            
             idx = self.vista.combo_tipo_cuenta.findData(usuario.get('id_tipo_usuario'))
             if idx >= 0:
+                self.vista.id_rol_original = usuario.get('id_tipo_usuario')
                 self.vista.combo_tipo_cuenta.setCurrentIndex(idx)
+                
+            self.vista._recovery_exitoso = False
             self.vista.combo_estado_cuenta.setCurrentText(usuario.get('estado_cuenta', 'ACTIVA'))
             self.vista.entrada_pass_actual.clear()
-            self.vista.entrada_pass_actual.setEnabled(True)
-            self.es_upgrade_a_bibliotecario = False
-            self.restaurar_visibilidad_recovery()
-            # Forzar reset del botón después de cargar un nuevo usuario
-            self.verificar_pass_tiempo_real("")
+            self.es_upgrade_a_admitido = False
+            self.vista.ajustar_visibilidad_campos_seguridad()
+            self.verificar_pass_tiempo_real(self.vista.entrada_pass_actual.text())
         else:
-            QMessageBox.warning(None, "No encontrado", "Usuario no registrado.")
+            self.solicitar_notificacion.emit('warn', "No encontrado", "Usuario no registrado.", None)
+            
+        self.evaluar_bloqueo_autoedicion_rol()
 
-    def proceso_recuperacion_emergencia(self):
-        from Modulos.PasswordRecover import ValidadorRecuperacion
-        dialogo = ValidadorRecuperacion(self.vista)
-        if dialogo.exec():
-            email = dialogo.entrada_email.text().strip()
-            if email:
-                self.vista.entrada_email.setText(email)
-                self.al_terminar_edicion_email()
-
-            self.es_upgrade_a_bibliotecario = True
-            self.vista.etiqueta_pass_actual.hide()
-            self.vista.entrada_pass_actual.hide()
-            self.vista.btn_recuperar_pass.hide()
-
-            self.vista.entrada_pass_actual.clear()
-            self.vista.entrada_pass_actual.setEnabled(True)
-            self.vista.entrada_pass_nueva.setFocus()
-
-            QMessageBox.information(self.vista, "Éxito", 
-                                  "Identidad confirmada.\nYa puedes ingresar la nueva contraseña.")
+    def validar_identidad_finalizada(self, exito, email=None):
+        if exito:
+            es_admitido, fue_admitido, _, _ = self._obtener_estados_admision()
+            
+            if fue_admitido and not es_admitido:
+                self.vista._recovery_exitoso = True
+                self.vista.ajustar_visibilidad_campos_seguridad()
+                self.vista.btn_guardar.setEnabled(True)
+            else:
+                if email:
+                    self.vista.entrada_email.setText(email)
+                    self.al_terminar_edicion_email()
+                self.es_upgrade_a_admitido = True
+                self.vista.ajustar_visibilidad_campos_seguridad()
+                self.vista.btn_guardar.setEnabled(True)
+                self.solicitar_notificacion.emit('success', "Identidad Confirmada", "Acceso de edición concedido.", None)
 
     def manejar_guardado(self):
         nombre = self.vista.entrada_nombre.text().strip()
-        email = self.vista.entrada_email.text().strip()
+        email_en_edicion = self.vista.entrada_email.text().strip()
+        email = email_en_edicion
         id_tipo = self.vista.combo_tipo_cuenta.currentData()
-        tipo_str = self.vista.combo_tipo_cuenta.currentText()
         nueva_pwd = self.vista.entrada_pass_nueva.text().strip()
         pass_actual = self.vista.entrada_pass_actual.text().strip()
+        nuevo_estado = self.vista.combo_estado_cuenta.currentText()
+        nuevo_rol_id = id_tipo
+
+        if self.modo == 'editar' and self.email_loggeado and self.email_loggeado == email_en_edicion:
+            usuario_bd = self.model.obtener_por_email(email_en_edicion)
+            if usuario_bd and usuario_bd.get('id_tipo_usuario') != nuevo_rol_id:
+                self.solicitar_notificacion.emit(
+                    'warn',
+                    "Alteración de Privilegios Denegada",
+                    "El sistema de seguridad prohíbe estrictamente que un usuario modifique su propio nivel de acceso o tipo de cuenta. Esta acción requiere la intervención de otro usuario con privilegios iguales o mayores desde una sesión completamente independiente.",
+                    None
+                )
+                return False
+
+        if self.modo == 'editar' and nuevo_estado in ['SUSPENDIDA', 'ELIMINADA']:
+            try:
+                from Modulos.Models.InicioSesionModel import LoginModel
+            except ImportError:
+                from Modulos.Models.InicioSesionModel import LoginModel
+            
+            lm = LoginModel()
+            lista_salvavidas = getattr(lm, 'obtener_lista_salvavidas_ddlm', lambda: [])()
+
+            if email_en_edicion in lista_salvavidas and len(lista_salvavidas) == 1:
+                self.solicitar_notificacion.emit(
+                    'crit',
+                    "Bloqueo del Sistema DDLM Activado",
+                    "Acción cancelada. Esta cuenta es actualmente el ÚNICO pilar estructural que previene que el sistema caiga en el modo Dios De La Máquina. No puedes suspender ni eliminar esta cuenta de usuario hasta que exista, al menos, una cuenta activa adicional con un tipo de usuario que posea los mismos o más permisos de acceso requeridos para mantener el sistema a flote.",
+                    None
+                )
+                self.vista.combo_estado_cuenta.setCurrentText("ACTIVA")
+                return False
 
         if not nombre or not email:
-            QMessageBox.warning(None, "Error", "Nombre y Email son obligatorios")
-            return None
+            self.solicitar_notificacion.emit('warn', "Datos Faltantes", "Nombre y Email son campos obligatorios.", None)
+            return False
 
-        if id_tipo is None:
-            QMessageBox.warning(None, "Error", "Seleccione un tipo de cuenta válido.")
-            return None
+        if not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', email):
+            self.solicitar_notificacion.emit('warn', "Formato Inválido", "El correo ingresado no es válido.", None)
+            return False
+
+        if hasattr(self.vista, 'verificar_coincidencia_contrasenas'):
+            if not self.vista.verificar_coincidencia_contrasenas():
+                return False
+
+        if nueva_pwd and len(nueva_pwd) < 8:
+            self.solicitar_notificacion.emit('warn', "Seguridad Débil", "La contraseña debe tener un mínimo de 8 caracteres.", None)
+            return False
+
+        es_admitido, fue_admitido, id_actual, id_orig = self._obtener_estados_admision()
+
+        if self.modo == 'editar' and fue_admitido and id_actual != id_orig:
+            cursor = self.model.bd.cursor(dictionary=True)
+            cursor.execute("SELECT admitido, permisos FROM param_tipos_usuario WHERE id_tipo_usuario = %s", (id_actual,))
+            target_info = cursor.fetchone()
+            cursor.close()
+            
+            permisos_json_str = target_info['permisos'] if target_info and target_info.get('permisos') else "{}"
+            
+            if not es_admitido:
+                resumen_permisos = "⚠️ NO PUEDES VOLVER A INICIAR SESIÓN.\nTu cuenta perderá todo acceso al sistema."
+            else:
+                try:
+                    perms = json.loads(permisos_json_str)
+                except Exception:
+                    perms = {}
+                
+                resumen_permisos = "✔️ PUEDES VOLVER A INICIAR SESIÓN.\nEstos serán tus nuevos privilegios:\n"
+                for modulo, acciones in perms.items():
+                    acts_activas = [k.capitalize() for k, v in acciones.items() if v]
+                    if acts_activas:
+                        resumen_permisos += f"  • {modulo}: {', '.join(acts_activas)}\n"
+                    else:
+                        resumen_permisos += f"  • {modulo}: Sin acceso\n"
+
+            mensaje_alerta = (
+                f"La cuenta está por ser cambiada a un tipo de usuario con accesos distintos:\n\n"
+                f"{resumen_permisos}\n\n"
+                "Ten en cuenta que si pierdes acceso a la vista y edición del apartado Usuarios no podrás recuperar tus accesos sin la ayuda de otro usuario con cuenta ADMItida y permisos de administración y vista.\n\n"
+                "En caso que sea el único usuario con contraseña, la próxima persona que abra el programa tendrá todos los privilegios hasta que haya una nueva cuenta de tipo ADMItida.\n\n"
+                "¿Desea continuar?"
+            )
+            
+            respuesta = QMessageBox.question(None, "Advertencia Crítica de Privilegios", mensaje_alerta, QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if respuesta == QMessageBox.No:
+                return False
 
         try:
+            pals = []
+            hay_senal = ValidadorCuenta.verificar_conexion() if hasattr(ValidadorCuenta, 'verificar_conexion') else False
+
             if self.modo == 'crear':
                 if self.model.obtener_por_email(email):
-                    QMessageBox.warning(None, "Error", "El email ya existe.")
-                    return None
-                if tipo_str == "Bibliotecario" and not nueva_pwd:
-                    QMessageBox.warning(None, "Error", "Requiere contraseña.")
-                    return None
-                pals = self.model.guardar_bd(nombre, email, id_tipo, "ACTIVA", nueva_pwd, False)
-                success_msg = "Usuario creado correctamente."
+                    self.solicitar_notificacion.emit('warn', "Conflicto", "Este email ya se encuentra registrado.", None)
+                    return False
+                
+                if es_admitido and not nueva_pwd:
+                    self.solicitar_notificacion.emit('warn', "Seguridad", "Las cuentas ADMItidas requieren una contraseña inicial.", None)
+                    return False
+
+                pals = self.model.guardar_bd(nombre, email, id_tipo, "ACTIVA", nueva_pwd, False, False)
+                auditoria_global.auditar_accion(1, "Usuarios", f"Creación de usuario: {email}")
+                
+                # --- AUTO-ENLACE DE SESIÓN DDLM Y REESCRITURA DE AUDITORÍA ---
+                if self.sesion_actual and self.sesion_actual.get('id_usuario') in [0, None]:
+                    usuario_nuevo = self.model.obtener_por_email(email)
+                    if usuario_nuevo:
+                        nuevo_id = usuario_nuevo['id_usuario']
+                        
+                        # Actualizamos el pasaporte en memoria
+                        self.sesion_actual['id_usuario'] = nuevo_id
+                        self.sesion_actual['nombre'] = usuario_nuevo['nombre']
+                        self.email_loggeado = email
+                        
+                        # Reescribir retroactivamente los registros NULL en la tabla auditorias
+                        try:
+                            cursor_audit = self.model.bd.cursor()
+                            cursor_audit.execute(
+                                "UPDATE auditorias SET id_usuario = %s WHERE id_usuario IS NULL", 
+                                (nuevo_id,)
+                            )
+                            self.model.bd.commit()
+                            cursor_audit.close()
+                        except Exception as e:
+                            print(f"[ERROR AUDITORÍA] No se pudo reescribir el historial nulo: {e}")
+
+                        # Refrescar el módulo de auditoría global para futuras acciones
+                        try:
+                            auditoria_global.vincular_sesion(self.sesion_actual)
+                        except Exception:
+                            pass
+
+                if es_admitido and hay_senal:
+                    self.solicitar_notificacion.emit('validador_cuenta', "Validación Requerida", email, pals)
+                    return True
+
+                msg = f"Usuario '{nombre}' creado en modo offline."
+            
             else:
-                # Edición normal o upgrade a Bibliotecario
-                estado = self.vista.combo_estado_cuenta.currentText()
+                estado = nuevo_estado
                 if estado == "SUSPENDIDA":
                     self.model.eliminar_logico(email)
-                    pals = []
-                    success_msg = "Usuario suspendido correctamente."
+                    auditoria_global.auditar_accion(3, "Usuarios", f"Suspensión lógica de usuario: {email}")
+                    msg = "La cuenta ha sido suspendida."
                 elif estado == "ELIMINADA":
-                    self.model.eliminar_fisico(email)
-                    pals = []
-                    success_msg = "Usuario eliminado correctamente."
+                    self.model.eliminar_physico(email) if hasattr(self.model, 'eliminar_physico') else self.model.eliminar_fisico(email)
+                    auditoria_global.auditar_accion(4, "Usuarios", f"Borrado físico de usuario: {email}")
+                    msg = "Registro eliminado permanentemente."
                 else:
-                    pwd_a_usar = nueva_pwd if nueva_pwd or self.es_upgrade_a_bibliotecario else pass_actual
-                    pals = self.model.guardar_bd(
-                        nombre, email, id_tipo, "ACTIVA", pwd_a_usar, True,
-                        forzar_palabras=self.es_upgrade_a_bibliotecario
-                    )
-                    success_msg = "Usuario actualizado correctamente."
+                    recovery_exitoso = getattr(self.vista, '_recovery_exitoso', False)
+                    
+                    if fue_admitido and not recovery_exitoso:
+                        if not PasswordHasher.verify(pass_actual, self.pass_actual_bd):
+                            self.solicitar_notificacion.emit('warn', "Seguridad", "La contraseña actual es incorrecta. No se pueden guardar los cambios.", None)
+                            return False
 
-            self.cargar_datos()
-            self.limpiar_formulario()
-            self.datos_actualizados.emit()
+                    if self.es_upgrade_a_admitido:
+                        self._backup_usuario = self.model.obtener_por_email(email)
 
-            QMessageBox.information(None, "Éxito", success_msg)
+                    pwd_a_usar = nueva_pwd if (nueva_pwd or self.es_upgrade_a_admitido) else pass_actual
+                    pals = self.model.guardar_bd(nombre, email, id_tipo, "ACTIVA", pwd_a_usar, True, self.es_upgrade_a_admitido)
+                    auditoria_global.auditar_accion(2, "Usuarios", f"Actualización de usuario: {email}")
+                    msg = "Información de perfil actualizada."
 
-            # VENTANA DE 12 PALABRAS SIEMPRE VISIBLE
-            if pals:
-                VentanaEmergenciaRecuperacion(pals, None).exec()
+                    if self.es_upgrade_a_admitido and hay_senal:
+                        self.solicitar_notificacion.emit('validador_cuenta', "Validación Requerida", email, pals)
+                        return True
 
-            return pals
+            self.finalizar_operacion(msg, pals)
+            return True
 
         except Exception as e:
-            QMessageBox.critical(None, "Error Crítico", f"No se pudo guardar: {str(e)}")
-            return None
+            self.solicitar_notificacion.emit('crit', "Error Crítico", str(e), None)
+            return False
+
+    def finalizar_operacion(self, mensaje, palabras=None):
+        if palabras:
+            try:
+                self.solicitar_notificacion.emit('emergencia', "Credenciales de Recuperación", "", palabras)
+            except Exception as e:
+                pals_formateadas = ", ".join(palabras) if isinstance(palabras, list) else str(palabras)
+                mensaje += f"\n\n⚠️ [RESPALDO CRÍTICO - PALABRAS MAESTRAS]:\n{pals_formateadas}"
+            
+        self.solicitar_notificacion.emit('success', "Operación Exitosa", mensaje, None)
+        self.cargar_datos()
+        self.datos_actualizados.emit()
+        self.limpiar_formulario()
+
+    def abortar_creacion(self, email):
+        if self.modo == 'editar' and self.es_upgrade_a_admitido and self._backup_usuario:
+            old = self._backup_usuario
+            cursor = self.model.bd.cursor()
+            try:
+                cursor.execute(
+                    "UPDATE usuarios SET nombre=%s, id_tipo_usuario=%s, estado_cuenta=%s, contraseña=%s WHERE email=%s",
+                    (old['nombre'], old['id_tipo_usuario'], old['estado_cuenta'], old['contraseña'], email)
+                )
+                self.model.bd.commit()
+            except Exception as e:
+                self.model.bd.rollback()
+            finally:
+                cursor.close()
+            
+            self.solicitar_notificacion.emit('crit', "Validación Fallida", "El ascenso a cuenta ADMItida fue abortado por seguridad. Se restauraron los privilegios anteriores.", None)
+        else:
+            self.model.eliminar_fisico(email)
+            self.solicitar_notificacion.emit('crit', "Validación Fallida", "El proceso de creación fue abortado por seguridad.", None)
+        
+        self.limpiar_formulario()
