@@ -27,6 +27,30 @@ class AuditoriaModel:
         except Exception as e:
             print(f"Falla crítica en el sistema de Auditoría: {e}")
 
+    def eliminar_rastro(self, modulo, subcadena_elemento):
+        """Elimina silenciosamente el último registro de auditoría de una operación abortada."""
+        try:
+            bd = self.conexion_obj.obtener_conexion()
+            if not bd:
+                return
+            
+            bd.commit()
+            cursor = bd.cursor()
+            
+            # Buscar el último registro específico para evitar borrar historiales legítimos pasados
+            consulta_sel = "SELECT id_auditoria FROM auditorias WHERE modulo = %s AND elemento LIKE %s ORDER BY id_auditoria DESC LIMIT 1"
+            cursor.execute(consulta_sel, (modulo, f"%{subcadena_elemento}%"))
+            resultado = cursor.fetchone()
+            
+            if resultado:
+                id_auditoria = resultado[0]
+                cursor.execute("DELETE FROM auditorias WHERE id_auditoria = %s", (id_auditoria,))
+                bd.commit()
+                
+            cursor.close()
+        except Exception as e:
+            print(f"Falla al eliminar rastro de auditoría abortada: {e}")
+
 
 class ControladorAuditoria(QObject):
     """
@@ -77,6 +101,10 @@ class ControladorAuditoria(QObject):
     def auditar_accion(self, id_accion, modulo, elemento):
         """Método unificador para compatibilidad directa con las llamadas de los demás módulos."""
         self._procesar_auditoria(id_accion, modulo, elemento)
+        
+    def eliminar_rastro_operacion(self, modulo, elemento):
+        """Llama al modelo para borrar la huella de una acción cancelada o fallida."""
+        self.model.eliminar_rastro(modulo, elemento)
 
     def _procesar_auditoria(self, id_accion, modulo, elemento):
         id_usr = self.id_usuario_actual

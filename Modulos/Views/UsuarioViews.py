@@ -407,9 +407,15 @@ class VistaUsuario(QWidget):
 
         es_admitido, fue_admitido, _, _ = self.parent_controller._obtener_estados_admision()
         
-        # Helper para forzar caracteres especiales excluyendo alfanuméricos y letras con tildes comunes
         def es_compleja(pwd):
-            return bool(re.search(r"[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ]", pwd))
+            tiene_mayuscula = bool(re.search(r"[A-ZÁÉÍÓÚÑ]", pwd))
+
+            tiene_minuscula = bool(re.search(r"[a-záéíóúñ]", pwd))
+
+            tiene_especial = bool(re.search(r"[^a-zA-Z0-9áéíóúÁÉÍÓÚñÑ]", pwd))
+
+            return tiene_mayuscula and tiene_minuscula and tiene_especial
+
         
         if self.btn_modo_crear.isChecked():
             if es_admitido:
@@ -419,7 +425,7 @@ class VistaUsuario(QWidget):
                     QMessageBox.warning(self, "Error de Validación", "La nueva contraseña es requerida para cuentas ADMItidas.")
                     return False
                 if not es_compleja(pass_nueva):
-                    QMessageBox.warning(self, "Error de Seguridad", "La contraseña debe contener obligatoriamente al menos un carácter especial (símbolo).")
+                    QMessageBox.warning(self, "Error de Seguridad", "La contraseña debe contener obligatoriamente al menos un carácter especial (símbolo), una mayúscula y una minúscula.")
                     return False
                 if pass_nueva != pass_conf:
                     QMessageBox.warning(self, "Error de Validación", "Las contraseñas ingresadas no coinciden. Por favor verifíquelas.")
@@ -440,7 +446,7 @@ class VistaUsuario(QWidget):
                     pass_conf = self.entrada_pass_confirmar.text().strip()
                     if pass_nueva or pass_conf:
                         if not es_compleja(pass_nueva):
-                            QMessageBox.warning(self, "Error de Seguridad", "La nueva contraseña debe contener obligatoriamente al menos un carácter especial (símbolo).")
+                            QMessageBox.warning(self, "Error de Seguridad", "La nueva contraseña debe contener obligatoriamente al menos un carácter especial (símbolo), una mayúscula y una minúscula.")
                             return False
                         if pass_nueva != pass_conf:
                             QMessageBox.warning(self, "Error de Validación", "Las contraseñas nuevas no coinciden.")
@@ -454,7 +460,7 @@ class VistaUsuario(QWidget):
                     QMessageBox.warning(self, "Error de Validación", "La nueva contraseña es requerida para el alta como cuenta ADMItida.")
                     return False
                 if not es_compleja(pass_nueva):
-                    QMessageBox.warning(self, "Error de Seguridad", "La contraseña debe contener obligatoriamente al menos un carácter especial (símbolo).")
+                    QMessageBox.warning(self, "Error de Seguridad", "La contraseña debe contener obligatoriamente al menos un carácter especial (símbolo), una mayúscula y una minúscula.")
                     return False
                 if pass_nueva != pass_conf:
                     QMessageBox.warning(self, "Error de Validación", "Las contraseñas ingresadas no coinciden. Por favor verifíquelas.")

@@ -41,10 +41,6 @@ class ControladorUsuario(QObject):
         v.entrada_pass_actual.textChanged.connect(self.verificar_pass_tiempo_real)
 
     def establecer_sesion_actual(self, pasaporte):
-        """
-        Recibe el pasaporte de la sesión actual y extrae el email del usuario loggeado
-        para poder imponer bloqueos estrictos de auto-edición de privilegios.
-        """
         self.sesion_actual = pasaporte
         self.email_loggeado = None
 
@@ -365,18 +361,15 @@ class ControladorUsuario(QObject):
                 pals = self.model.guardar_bd(nombre, email, id_tipo, "ACTIVA", nueva_pwd, False, False)
                 auditoria_global.auditar_accion(1, "Usuarios", f"Creación de usuario: {email}")
                 
-                # --- AUTO-ENLACE DE SESIÓN DDLM Y REESCRITURA DE AUDITORÍA ---
                 if self.sesion_actual and self.sesion_actual.get('id_usuario') in [0, None]:
                     usuario_nuevo = self.model.obtener_por_email(email)
                     if usuario_nuevo:
                         nuevo_id = usuario_nuevo['id_usuario']
                         
-                        # Actualizamos el pasaporte en memoria
                         self.sesion_actual['id_usuario'] = nuevo_id
                         self.sesion_actual['nombre'] = usuario_nuevo['nombre']
                         self.email_loggeado = email
                         
-                        # Reescribir retroactivamente los registros NULL en la tabla auditorias
                         try:
                             cursor_audit = self.model.bd.cursor()
                             cursor_audit.execute(
@@ -388,7 +381,6 @@ class ControladorUsuario(QObject):
                         except Exception as e:
                             print(f"[ERROR AUDITORÍA] No se pudo reescribir el historial nulo: {e}")
 
-                        # Refrescar el módulo de auditoría global para futuras acciones
                         try:
                             auditoria_global.vincular_sesion(self.sesion_actual)
                         except Exception:
@@ -460,6 +452,8 @@ class ControladorUsuario(QObject):
                     (old['nombre'], old['id_tipo_usuario'], old['estado_cuenta'], old['contraseña'], email)
                 )
                 self.model.bd.commit()
+                # Borramos silenciosamente el rastro de la actualización cancelada
+                auditoria_global.eliminar_rastro_operacion("Usuarios", email)
             except Exception as e:
                 self.model.bd.rollback()
             finally:
@@ -468,6 +462,8 @@ class ControladorUsuario(QObject):
             self.solicitar_notificacion.emit('crit', "Validación Fallida", "El ascenso a cuenta ADMItida fue abortado por seguridad. Se restauraron los privilegios anteriores.", None)
         else:
             self.model.eliminar_fisico(email)
+            # Borramos silenciosamente el rastro del intento de creación cancelado
+            auditoria_global.eliminar_rastro_operacion("Usuarios", email)
             self.solicitar_notificacion.emit('crit', "Validación Fallida", "El proceso de creación fue abortado por seguridad.", None)
         
         self.limpiar_formulario()
