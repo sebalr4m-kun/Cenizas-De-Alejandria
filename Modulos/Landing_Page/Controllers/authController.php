@@ -4,6 +4,20 @@ session_start();
 header("Content-Type: application/json");
 require_once __DIR__ . '/../Models/authModel.php';
 
+// Cargar variables de entorno desde .env si existe
+$envFile = __DIR__ . '/../.env';
+if (file_exists($envFile)) {
+    $lines = file($envFile, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+    foreach ($lines as $line) {
+        if (strpos(trim($line), '#') === 0) continue;
+        list($name, $value) = explode('=', $line, 2);
+        $_ENV[trim($name)] = trim($value);
+    }
+}
+
+$smtpEmail = $_ENV['SMTP_EMAIL'] ?? getenv('SMTP_EMAIL');
+$smtpPassword = $_ENV['SMTP_PASSWORD'] ?? getenv('SMTP_PASSWORD');
+
 // Clases requeridas para PHPMailer
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception;
@@ -45,16 +59,20 @@ switch ($data->action) {
             
             $mail = new PHPMailer(true);
             try {
+                if (!$smtpEmail || !$smtpPassword) {
+                    throw new Exception("Credenciales SMTP no configuradas en el entorno.");
+                }
+
                 $mail->isSMTP();
                 $mail->SMTPDebug = 0;
                 $mail->Host       = 'smtp.gmail.com';
                 $mail->SMTPAuth   = true;
-                $mail->Username   = '414nX4rd@gmail.com'; 
-                $mail->Password   = 'lvjzabsitxrxwqmr';   
+                $mail->Username   = $smtpEmail; 
+                $mail->Password   = $smtpPassword;   
                 $mail->SMTPSecure = PHPMailer::ENCRYPTION_SMTPS;
                 $mail->Port       = 465;
 
-                $mail->setFrom('414nX4rd@gmail.com', 'Cenizas de Alejandria');
+                $mail->setFrom($smtpEmail, 'Cenizas de Alejandria');
                 $mail->addAddress($data->email, $data->nombre);
 
                 $mail->isHTML(false);
@@ -152,16 +170,20 @@ switch ($data->action) {
             $mail = new PHPMailer(true);
             
             try {
+                if (!$smtpEmail || !$smtpPassword) {
+                    throw new Exception("Credenciales SMTP no configuradas en el entorno.");
+                }
+
                 $mail->isSMTP();
                 $mail->SMTPDebug = 0; 
                 $mail->Host       = 'smtp.gmail.com';
                 $mail->SMTPAuth   = true;
-                $mail->Username   = '414nX4rd@gmail.com'; 
-                $mail->Password   = 'lvjzabsitxrxwqmr';   
+                $mail->Username   = $smtpEmail; 
+                $mail->Password   = $smtpPassword;   
                 $mail->SMTPSecure = PHPMailer::ENCRYPTION_SMTPS;
                 $mail->Port       = 465;
 
-                $mail->setFrom('414nX4rd@gmail.com', 'Cenizas de Alejandria');
+                $mail->setFrom($smtpEmail, 'Cenizas de Alejandria');
                 $mail->addAddress($data->email, $user['nombre']);
 
                 $mail->isHTML(false);

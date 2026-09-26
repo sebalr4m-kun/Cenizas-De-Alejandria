@@ -3,7 +3,143 @@
 # ==========================================
 import datetime
 from datetime import timedelta
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QPushButton, QFrame, QSizePolicy
+from PySide6.QtGui import QPainter, QColor, QPen, QFont, QBrush
+from PySide6.QtCore import Qt, QRectF
 from Modulos.Config import Conexion
+
+class CanvasGrafico(QWidget):
+    """Lienzo interno reutilizado para graficar series."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumHeight(300)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.datos = None
+
+    def actualizar_datos(self, datos):
+        self.datos = datos
+        self.update()
+
+    def paintEvent(self, event):
+        if not self.datos: return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        bg_col = QColor(self.datos.get("estilo_base", {}).get("fondo", "#121212"))
+        text_col = QColor(self.datos.get("estilo_base", {}).get("texto", "#FFFFFF"))
+        painter.fillRect(0, 0, self.width(), self.height(), bg_col)
+
+        painter.setFont(QFont("Segoe UI", 11, QFont.Bold))
+        painter.setPen(QPen(text_col))
+        painter.drawText(20, 25, self.datos.get("titulo", "Estadísticas"))
+
+        series = self.datos.get("series", [])
+        eje_x = self.datos.get("eje_x", [])
+        if not series or not eje_x: return
+
+        margin_left, margin_right, margin_top, margin_bottom = 50, 30, 70, 40
+        max_val = max([max(s["datos"]) if s["datos"] else 0 for s in series])
+        val_top = max(10, int(max_val * 1.2))
+        
+        lx, ly = margin_left, 42
+        for s in series:
+            col = QColor(s.get("color_barra", "#FFFFFF"))
+            painter.fillRect(lx, ly, 10, 10, col)
+            painter.drawText(lx + 14, ly + 9, s.get("nombre", ""))
+            lx += len(s.get("nombre", "")) * 8 + 30
+
+        chart_w, chart_h = self.width() - margin_left - margin_right, self.height() - margin_top - margin_bottom
+        painter.setPen(QPen(QColor(189, 195, 199), 1.5))
+        painter.drawLine(margin_left, margin_top, margin_left, margin_top + chart_h)
+        painter.drawLine(margin_left, margin_top + chart_h, margin_left + chart_w, margin_top + chart_h)
+
+        cat_w = chart_w / len(eje_x)
+        bar_w = max(3, (cat_w * 0.8) / len(series))
+        
+        for cat_idx, label in enumerate(eje_x):
+            cat_x = margin_left + (cat_idx * cat_w) + (cat_w * 0.1)
+            for s_idx, serie in enumerate(series):
+                val = serie["datos"][cat_idx]
+                if val > 0:
+                    x_pos = cat_x + (s_idx * bar_w)
+                    bar_h = (val / val_top) * chart_h
+                    y_pos = margin_top + chart_h - bar_h
+                    
+                    col_barra = QColor(serie["color_barra"])
+                    painter.setBrush(QBrush(col_barra))
+                    painter.setPen(QPen(col_barra.darker(110), 1))
+                    painter.drawRoundedRect(QRectF(x_pos, y_pos, max(2, bar_w - 1), bar_h), 2, 2)
+            
+            painter.setPen(QPen(text_col))
+            painter.setFont(QFont("Segoe UI", 8))
+            painter.drawText(QRectF(margin_left + (cat_idx * cat_w), margin_top + chart_h + 5, cat_w, 25), Qt.AlignCenter, str(label)[-5:])
+
+class VistaParametroEstadisticas(QWidget):
+    """Marco visual exclusivo e integrado del módulo de Parámetros."""
+    def __init__(self, controlador, parent=None):
+        super().__init__(parent)
+        self.controlador = controlador
+        self.offset_periodo = 0
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(15, 15, 15, 15)
+
+        layout_ctrls = QHBoxLayout()
+        layout_ctrls.addWidget(QLabel("📊 Panel de Parámetros"))
+        layout_ctrls.addStretch()
+
+        self.combo_agrupacion = QComboBox()
+        self.combo_agrupacion.addItems(["Por Semana", "Por Mes", "Por Año"])
+        self.combo_accion = QComboBox()
+
+        for acc in self.controlador.obtener_acciones_disponibles():
+            self.combo_accion.addItem(acc["nombre"], userData=acc["id"])
+
+        self.btn_ant = QPushButton("◄")
+        self.btn_ant.setFixedWidth(35)
+        self.lbl_rango = QLabel("Actual")
+        self.lbl_rango.setStyleSheet("font-weight: bold; margin: 0 5px;")
+        self.btn_sig = QPushButton("►")
+        self.btn_sig.setFixedWidth(35)
+
+        layout_ctrls.addWidget(self.btn_ant)
+        layout_ctrls.addWidget(self.lbl_rango)
+        layout_ctrls.addWidget(self.btn_sig)
+        layout_ctrls.addSpacing(15)
+        layout_ctrls.addWidget(QLabel("Acción:"))
+        layout_ctrls.addWidget(self.combo_accion)
+        layout_ctrls.addWidget(QLabel("Línea de Tiempo:"))
+        layout_ctrls.addWidget(self.combo_agrupacion)
+
+        layout.addLayout(layout_ctrls)
+        
+        linea = QFrame()
+        linea.setFrameShape(QFrame.HLine)
+        layout.addWidget(linea)
+
+        self.canvas = CanvasGrafico()
+        layout.addWidget(self.canvas, 1)
+
+        self.combo_agrupacion.currentIndexChanged.connect(self._reset_y_actualizar)
+        self.combo_accion.currentIndexChanged.connect(self._reset_y_actualizar)
+        self.btn_ant.clicked.connect(lambda: self._desplazar(-1))
+        self.btn_sig.clicked.connect(lambda: self._desplazar(1))
+
+    def _reset_y_actualizar(self):
+        self.offset_periodo = 0
+        self.actualizar_vista_grafico()
+
+    def _desplazar(self, delta):
+        if self.offset_periodo + delta > 0: return
+        self.offset_periodo += delta
+        self.actualizar_vista_grafico()
+
+    def actualizar_vista_grafico(self):
+        self.lbl_rango.setText("Actual" if self.offset_periodo == 0 else str(self.offset_periodo))
+        datos = self.controlador.obtener_reporte_estadistico(
+            self.combo_agrupacion.currentText(), self.offset_periodo, self.combo_accion.currentData()
+        )
+        self.canvas.actualizar_datos(datos)
 
 class ParametroEstadisticas:
     """
@@ -30,6 +166,12 @@ class ParametroEstadisticas:
     def __init__(self):
         self.conexion_obj = Conexion()
         self.bd = self.conexion_obj.obtener_conexion()
+        self.vista = None
+
+    def obtener_widget_vista(self):
+        if not self.vista:
+            self.vista = VistaParametroEstadisticas(self)
+        return self.vista
 
     def _refrescar_transaccion(self):
         if self.bd:

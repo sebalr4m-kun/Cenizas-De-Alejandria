@@ -6,10 +6,21 @@ from datetime import timedelta
 import calendar
 from Modulos.Config import Conexion
 
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QPushButton, QLabel, QFrame, QLineEdit
+)
+from PySide6.QtGui import QColor, QPainter
+from PySide6.QtCore import Qt
+from PySide6.QtCharts import (
+    QChart, QChartView, QBarSet, QBarSeries, QStackedBarSeries, 
+    QBarCategoryAxis, QValueAxis
+)
+
 class InsumoEstadisticas:
     """
     Controlador estadístico dedicado al módulo de Insumos.
-    Ofrece vistas temporales de auditoría (flujo) y vistas estáticas de inventario físico.
+    Ahora actúa como Controlador y Vista simultáneamente, generando su propia
+    interfaz gráfica con PySide6 y QtCharts, lista para ser incrustada en MainWindow.
     """
 
     COLORES_ACCIONES = {
@@ -41,9 +52,185 @@ class InsumoEstadisticas:
     COLOR_TEXTO_MODO_NEGRO = "#FFFFFF"
     COLOR_FONDO_MODO_NEGRO = "#121212"
 
-    def __init__(self):
-        self.conexion_obj = Conexion()
+    def __init__(self, conexion=None):
+        self.conexion_obj = conexion if conexion else Conexion()
         self.bd = self.conexion_obj.obtener_conexion()
+        
+        # Variables de estado de la vista
+        self.offset_periodo = 0
+        self.vista = QWidget()
+        self._construir_vista()
+
+    # =========================================================================
+    # CONSTRUCCIÓN DE LA VISTA (INTERFAZ GRÁFICA)
+    # =========================================================================
+    
+    def _construir_vista(self):
+        """Construye el marco de la vista estadística, los controles y el gráfico."""
+        layout_principal = QVBoxLayout(self.vista)
+        layout_principal.setContentsMargins(10, 10, 10, 10)
+        
+        # --- Panel de Controles Superiores ---
+        panel_controles = QFrame()
+        layout_controles = QHBoxLayout(panel_controles)
+        layout_controles.setContentsMargins(0, 0, 0, 0)
+        layout_controles.setSpacing(15)  # Espaciado extra para las opciones restantes
+        
+        self.lbl_filtro = QLabel("Filtro/Vista:")
+        self.cmb_accion = QComboBox()
+        self.cmb_accion.currentIndexChanged.connect(self._al_cambiar_accion)
+        
+        self.lbl_subfiltro = QLabel("Subfiltro:")
+        self.cmb_subfiltro = QComboBox()
+        self.cmb_subfiltro.currentIndexChanged.connect(self.actualizar_grafico)
+        
+        self.lbl_busqueda = QLabel("Buscar:")
+        self.txt_busqueda = QLineEdit()
+        self.txt_busqueda.setPlaceholderText("Búsqueda rápida...")
+        self.txt_busqueda.textChanged.connect(self.actualizar_grafico)
+        
+        self.lbl_agrupacion = QLabel("Agrupación:")
+        self.cmb_agrupacion = QComboBox()
+        self.cmb_agrupacion.addItems(["Por Día", "Por Semana", "Por Mes", "Por Año"])
+        self.cmb_agrupacion.currentIndexChanged.connect(self.actualizar_grafico)
+        
+        self.btn_prev = QPushButton("◀ Anterior")
+        self.btn_prev.clicked.connect(self._retroceder_periodo)
+        
+        self.btn_next = QPushButton("Siguiente ▶")
+        self.btn_next.clicked.connect(self._avanzar_periodo)
+        
+        layout_controles.addWidget(self.lbl_filtro)
+        layout_controles.addWidget(self.cmb_accion)
+        layout_controles.addWidget(self.lbl_subfiltro)
+        layout_controles.addWidget(self.cmb_subfiltro)
+        layout_controles.addWidget(self.lbl_busqueda)
+        layout_controles.addWidget(self.txt_busqueda)
+        layout_controles.addWidget(self.lbl_agrupacion)
+        layout_controles.addWidget(self.cmb_agrupacion)
+        layout_controles.addStretch()
+        layout_controles.addWidget(self.btn_prev)
+        layout_controles.addWidget(self.btn_next)
+        
+        layout_principal.addWidget(panel_controles)
+        
+        # --- Lienzo del Gráfico ---
+        self.chart = QChart()
+        self.chart.setAnimationOptions(QChart.SeriesAnimations)
+        self.chart.setBackgroundBrush(QColor(self.COLOR_FONDO_MODO_NEGRO))
+        self.chart.setTitleBrush(QColor(self.COLOR_TEXTO_MODO_NEGRO))
+        
+        self.chart_view = QChartView(self.chart)
+        self.chart_view.setRenderHint(QPainter.Antialiasing)
+        
+        layout_principal.addWidget(self.chart_view)
+
+        # Cargar datos iniciales en los controles
+        self.cargar_datos()
+
+    def obtener_widget_vista(self):
+        """Retorna el widget principal de la vista construido para que MainWindow lo consuma."""
+        return self.vista
+
+    def cargar_datos(self):
+        """Inicializa/reinicia los comboboxes y recarga el gráfico."""
+        self.cmb_accion.blockSignals(True)
+        self.cmb_accion.clear()
+        acciones = self.obtener_acciones_disponibles()
+        for acc in acciones:
+            self.cmb_accion.addItem(acc["nombre"], userData=acc["id"])
+        self.cmb_accion.blockSignals(False)
+        
+        self._al_cambiar_accion()
+
+    def _al_cambiar_accion(self):
+        """Actualiza los subfiltros disponibles y altera la visibilidad al cambiar de vista."""
+        id_accion = self.cmb_accion.currentData()
+        
+        self.cmb_subfiltro.blockSignals(True)
+        self.cmb_subfiltro.clear()
+        subfiltros = self.obtener_subfiltros_disponibles(id_accion)
+        for sub in subfiltros:
+            self.cmb_subfiltro.addItem(sub["nombre"], userData=sub["id"])
+        self.cmb_subfiltro.blockSignals(False)
+        
+        es_vista_estatica = id_accion in ["tipos", "estados"]
+        
+        # Si es un Catálogo/Inventario estático: ocultar agrupación y navegación
+        self.lbl_agrupacion.setVisible(not es_vista_estatica)
+        self.cmb_agrupacion.setVisible(not es_vista_estatica)
+        self.btn_prev.setVisible(not es_vista_estatica)
+        self.btn_next.setVisible(not es_vista_estatica)
+        
+        # Si es Auditoría (NO estática): ocultar subfiltro y barra de búsqueda
+        self.lbl_subfiltro.setVisible(es_vista_estatica)
+        self.cmb_subfiltro.setVisible(es_vista_estatica)
+        self.lbl_busqueda.setVisible(es_vista_estatica)
+        self.txt_busqueda.setVisible(es_vista_estatica)
+
+        # Limpiar la barra de búsqueda al cambiar para evitar filtros residuales
+        self.txt_busqueda.blockSignals(True)
+        self.txt_busqueda.clear()
+        self.txt_busqueda.blockSignals(False)
+        
+        self.offset_periodo = 0
+        self.actualizar_grafico()
+
+    def _retroceder_periodo(self):
+        self.offset_periodo -= 1
+        self.actualizar_grafico()
+
+    def _avanzar_periodo(self):
+        self.offset_periodo += 1
+        self.actualizar_grafico()
+
+    def actualizar_grafico(self):
+        """Solicita los datos lógicos y dibuja las series y ejes en el QChart."""
+        id_accion = self.cmb_accion.currentData()
+        id_subfiltro = self.cmb_subfiltro.currentData()
+        agrupacion = self.cmb_agrupacion.currentText()
+        texto_busqueda = self.txt_busqueda.text()
+        
+        datos = self.obtener_reporte_estadistico(agrupacion, self.offset_periodo, id_accion, id_subfiltro, texto_busqueda)
+        
+        self.chart.removeAllSeries()
+        for ax in self.chart.axes():
+            self.chart.removeAxis(ax)
+
+        modo = datos.get("modo_grafico", "agrupado_lado_a_lado")
+        
+        if modo == "apilado":
+            series_chart = QStackedBarSeries()
+        else:
+            series_chart = QBarSeries()
+            
+        for serie_data in datos["series"]:
+            bar_set = QBarSet(serie_data["nombre"])
+            bar_set.append(serie_data["datos"])
+            bar_set.setColor(QColor(serie_data.get("color_barra", "#FFFFFF")))
+            series_chart.append(bar_set)
+            
+        self.chart.addSeries(series_chart)
+        self.chart.setTitle(datos["titulo"])
+        self.chart.setTitleBrush(QColor(datos.get("estilo_base", {}).get("texto", self.COLOR_TEXTO_MODO_NEGRO)))
+        self.chart.setBackgroundBrush(QColor(datos.get("estilo_base", {}).get("fondo", self.COLOR_FONDO_MODO_NEGRO)))
+        
+        axis_x = QBarCategoryAxis()
+        axis_x.append(datos["eje_x"])
+        axis_x.setLabelsBrush(QColor(datos.get("estilo_base", {}).get("texto", self.COLOR_TEXTO_MODO_NEGRO)))
+        self.chart.addAxis(axis_x, Qt.AlignBottom)
+        series_chart.attachAxis(axis_x)
+        
+        axis_y = QValueAxis()
+        axis_y.setLabelsBrush(QColor(datos.get("estilo_base", {}).get("texto", self.COLOR_TEXTO_MODO_NEGRO)))
+        # Evitar valores flotantes si son conteos
+        axis_y.setLabelFormat("%d")
+        self.chart.addAxis(axis_y, Qt.AlignLeft)
+        series_chart.attachAxis(axis_y)
+
+    # =========================================================================
+    # LÓGICA DE DATOS
+    # =========================================================================
 
     def _refrescar_transaccion(self):
         if self.bd:
@@ -61,7 +248,7 @@ class InsumoEstadisticas:
         acciones.append({"id": "estados", "nombre": "Inventario: Estados Físicos"})
         return acciones
 
-    def obtener_subfiltros_disponibles(self):
+    def obtener_subfiltros_disponibles(self, id_accion=None):
         """Busca dinámicamente los tipos de insumos registrados."""
         self._refrescar_transaccion()
         filtros = [{"id": None, "nombre": "Todos los Tipos de Insumo"}]
@@ -89,14 +276,14 @@ class InsumoEstadisticas:
         finally:
             cursor.close()
 
-    def obtener_reporte_estadistico(self, agrupacion="Por Semana", offset_periodo=0, id_accion_filtro=None, id_subfiltro=None):
+    def obtener_reporte_estadistico(self, agrupacion="Por Semana", offset_periodo=0, id_accion_filtro=None, id_subfiltro=None, texto_busqueda=""):
         """Punto de entrada. Enruta hacia la línea de tiempo (Auditoría) o fotografía estática (Inventario)."""
         
         # Enrutamiento de vistas estáticas de inventario
         if id_accion_filtro == "tipos":
-            return self._generar_reporte_tipos()
+            return self._generar_reporte_tipos(texto_busqueda)
         elif id_accion_filtro == "estados":
-            return self._generar_reporte_estados(id_subfiltro)
+            return self._generar_reporte_estados(id_subfiltro, texto_busqueda)
 
         # Enrutamiento de vistas temporales de auditoría
         if agrupacion in ["Por Día", "Por Semana"]:
@@ -117,11 +304,7 @@ class InsumoEstadisticas:
         datos["titulo"] = titulo
         return datos
 
-    # =========================================================================
-    # VISTAS ESTÁTICAS DE INVENTARIO
-    # =========================================================================
-
-    def _generar_reporte_tipos(self):
+    def _generar_reporte_tipos(self, texto_busqueda=""):
         self._refrescar_transaccion()
         cursor = self.bd.cursor(dictionary=True)
         series = []
@@ -130,9 +313,20 @@ class InsumoEstadisticas:
                 SELECT t.nombre, COUNT(i.id_insumo) as total
                 FROM param_tipos_insumo t
                 LEFT JOIN insumos i ON t.id_tipo_insumo = i.id_tipo_insumo
-                GROUP BY t.id_tipo_insumo, t.nombre
             """
-            cursor.execute(sql)
+            params = []
+            
+            if texto_busqueda:
+                sql += " WHERE t.nombre LIKE %s"
+                params.append(f"%{texto_busqueda}%")
+                
+            sql += " GROUP BY t.id_tipo_insumo, t.nombre"
+            
+            if params:
+                cursor.execute(sql, tuple(params))
+            else:
+                cursor.execute(sql)
+                
             filas = cursor.fetchall()
             
             color_idx = 0
@@ -157,19 +351,33 @@ class InsumoEstadisticas:
             "titulo": "Inventario Global - Absorbido por Tipo de Insumo"
         }
 
-    def _generar_reporte_estados(self, id_subfiltro=None):
+    def _generar_reporte_estados(self, id_subfiltro=None, texto_busqueda=""):
         self._refrescar_transaccion()
         cursor = self.bd.cursor(dictionary=True)
         series = []
         try:
             sql = "SELECT estado, COUNT(id_insumo) as total FROM insumos"
+            condiciones = []
             params = []
+            
             if id_subfiltro:
-                sql += " WHERE id_tipo_insumo = %s"
+                condiciones.append("id_tipo_insumo = %s")
                 params.append(id_subfiltro)
+                
+            if texto_busqueda:
+                condiciones.append("titulo LIKE %s")
+                params.append(f"%{texto_busqueda}%")
+                
+            if condiciones:
+                sql += " WHERE " + " AND ".join(condiciones)
+                
             sql += " GROUP BY estado"
             
-            cursor.execute(sql, tuple(params))
+            if params:
+                cursor.execute(sql, tuple(params))
+            else:
+                cursor.execute(sql)
+                
             filas = cursor.fetchall()
             
             color_idx = 0
@@ -187,7 +395,7 @@ class InsumoEstadisticas:
         finally:
             cursor.close()
 
-        titulo = "Estado Físico del Inventario (Filtrado)" if id_subfiltro else "Estado Físico del Inventario Global"
+        titulo = "Estado Físico del Inventario (Filtrado)" if id_subfiltro or texto_busqueda else "Estado Físico del Inventario Global"
         return {
             "modo_grafico": "agrupado_lado_a_lado",
             "estilo_base": {"fondo": self.COLOR_FONDO_MODO_NEGRO, "texto": self.COLOR_TEXTO_MODO_NEGRO},
@@ -195,10 +403,6 @@ class InsumoEstadisticas:
             "series": series,
             "titulo": titulo
         }
-
-    # =========================================================================
-    # VISTAS TEMPORALES DE AUDITORÍA
-    # =========================================================================
 
     def obtener_estadisticas_semanales(self, offset_periodo=0, id_accion_filtro=None, id_subfiltro=None):
         self._refrescar_transaccion()
@@ -227,11 +431,6 @@ class InsumoEstadisticas:
             if id_accion_filtro:
                 sql += " AND id_accion = %s"
                 params.append(id_accion_filtro)
-            if id_subfiltro:
-                # El id_subfiltro aplica un Like sobre el elemento registrado de la auditoria
-                # Asumiendo registro de formato, esto es una aproximación, aunque
-                # es más útil en inventarios que en la tabla limpia de auditoría.
-                pass
 
             sql += " GROUP BY DATE(fecha_hora), id_accion"
 

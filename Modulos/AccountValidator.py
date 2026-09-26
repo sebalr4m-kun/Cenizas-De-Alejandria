@@ -1,12 +1,17 @@
+import os
 import random
 import socket
 import smtplib
+from dotenv import load_dotenv
 from email.mime.text import MIMEText
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QLabel, QLineEdit, 
     QPushButton, QMessageBox, QApplication
 )
 from PySide6.QtCore import Qt
+
+# Cargar las variables de entorno desde el archivo .env en la raíz
+load_dotenv()
 
 class ValidadorCuenta(QDialog):
     """
@@ -144,8 +149,13 @@ class ValidadorCuenta(QDialog):
 
     def enviar_correo(self):
         try:
-            remitente = "414nX4rd@gmail.com"
-            password = "lvjzabsitxrxwqmr" 
+            # Obtención de credenciales desde las variables de entorno
+            remitente = os.getenv("SMTP_EMAIL")
+            password = os.getenv("SMTP_PASSWORD")
+
+            if not remitente or not password:
+                print("[ERROR CRÍTICO] Las credenciales SMTP no están configuradas en el archivo .env.")
+                return False
             
             print("\n" + "="*50)
             print(f"[DEBUG - CÓDIGOS DE VALIDACIÓN PARA: {self.email_usuario}]")

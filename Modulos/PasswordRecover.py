@@ -1,3 +1,5 @@
+import os
+from dotenv import load_dotenv
 import random
 import socket
 import smtplib
@@ -10,6 +12,9 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 from Modulos.Config import Conexion
+
+# Cargar variables de entorno
+load_dotenv()
 
 class ValidadorRecuperacion(QDialog):
     def __init__(self, padre=None):
@@ -183,7 +188,7 @@ class ValidadorRecuperacion(QDialog):
         self.expiracion_token = datetime.now() + timedelta(minutes=10)
         
         if self.enviar_correo(palabras_a_enviar):
-            self.mostrar_interfaz_desafio("CÓDIGO ENVIADO\nIngrese las posiciones indicadas:")
+            self.mostrar_interfaz_desafio("CÓDIGO ENVIADO\\nIngrese las posiciones indicadas:")
         else:
             self.generar_desafio_local(cursor)
 
@@ -203,13 +208,13 @@ class ValidadorRecuperacion(QDialog):
             cursor.execute("SELECT palabra FROM param_diccionario_seguridad WHERE id_palabra = %s", (indices[pos],))
             self.palabras_correctas[pos + 1] = cursor.fetchone()['palabra']
 
-        self.mostrar_interfaz_desafio("MODO OFFLINE\nConsulte sus llaves físicas:")
+        self.mostrar_interfaz_desafio("MODO OFFLINE\\nConsulte sus llaves físicas:")
 
     def enviar_correo(self, lineas_palabras):
         try:
-            remitente = "414nX4rd@gmail.com"
-            password = "lvjzabsitxrxwqmr" 
-            cuerpo = "Palabras de Recuperación RBAC:\n" + "\n".join(lineas_palabras)
+            remitente = os.getenv("SMTP_EMAIL")
+            password = os.getenv("SMTP_PASSWORD") 
+            cuerpo = "Palabras de Recuperación RBAC:\\n" + "\\n".join(lineas_palabras)
             
             msg = MIMEText(cuerpo, 'plain', 'utf-8')
             msg['Subject'] = "Seguridad de Acceso - Cenizas de Alejandría"

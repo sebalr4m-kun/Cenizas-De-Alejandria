@@ -6,10 +6,21 @@ from datetime import timedelta
 import calendar
 from Modulos.Config import Conexion
 
+from PySide6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QPushButton, QLabel, QFrame, QLineEdit
+)
+from PySide6.QtGui import QColor, QPainter
+from PySide6.QtCore import Qt
+from PySide6.QtCharts import (
+    QChart, QChartView, QBarSet, QBarSeries, QStackedBarSeries, 
+    QBarCategoryAxis, QValueAxis
+)
+
 class LibroEstadisticas:
     """
     Controlador estadístico dedicado al módulo de Libros.
-    Ofrece vistas temporales de auditoría (flujo) y vistas estáticas del catálogo con soporte de subfiltros.
+    Ofrece su propia vista completa lista para MainWindow, fusionando sus 
+    funcionalidades clásicas de filtrado, offsets y construcción de interfaz.
     """
 
     COLORES_ACCIONES = {
@@ -39,9 +50,187 @@ class LibroEstadisticas:
     COLOR_TEXTO_MODO_NEGRO = "#FFFFFF"
     COLOR_FONDO_MODO_NEGRO = "#121212"
 
-    def __init__(self):
-        self.conexion_obj = Conexion()
+    def __init__(self, conexion=None):
+        self.conexion_obj = conexion if conexion else Conexion()
         self.bd = self.conexion_obj.obtener_conexion()
+        
+        # Estado interno de la vista
+        self.offset_periodo = 0
+        self.vista = QWidget()
+        self._construir_vista()
+
+    # =========================================================================
+    # CONSTRUCCIÓN DE LA VISTA (INTERFAZ GRÁFICA)
+    # =========================================================================
+    
+    def _construir_vista(self):
+        """Ensambla el layout principal, área superior de controles y área de gráficos."""
+        layout_principal = QVBoxLayout(self.vista)
+        layout_principal.setContentsMargins(10, 10, 10, 10)
+        
+        # Panel superior: controles y filtros
+        panel_controles = QFrame()
+        layout_controles = QHBoxLayout(panel_controles)
+        layout_controles.setContentsMargins(0, 0, 0, 0)
+        layout_controles.setSpacing(15)  # Espacios adicionales para las opciones restantes
+        
+        self.lbl_filtro = QLabel("Filtro/Vista:")
+        self.cmb_accion = QComboBox()
+        self.cmb_accion.currentIndexChanged.connect(self._al_cambiar_accion)
+        
+        self.lbl_subfiltro = QLabel("Subfiltro:")
+        self.cmb_subfiltro = QComboBox()
+        self.cmb_subfiltro.currentIndexChanged.connect(self.actualizar_grafico)
+
+        self.lbl_busqueda = QLabel("Buscar:")
+        self.txt_busqueda = QLineEdit()
+        self.txt_busqueda.setPlaceholderText("Búsqueda rápida...")
+        self.txt_busqueda.textChanged.connect(self.actualizar_grafico)
+        
+        self.lbl_agrupacion = QLabel("Agrupación:")
+        self.cmb_agrupacion = QComboBox()
+        self.cmb_agrupacion.addItems(["Por Día", "Por Semana", "Por Mes", "Por Año"])
+        self.cmb_agrupacion.currentIndexChanged.connect(self.actualizar_grafico)
+        
+        self.btn_prev = QPushButton("◀ Anterior")
+        self.btn_prev.clicked.connect(self._retroceder_periodo)
+        
+        self.btn_next = QPushButton("Siguiente ▶")
+        self.btn_next.clicked.connect(self._avanzar_periodo)
+        
+        layout_controles.addWidget(self.lbl_filtro)
+        layout_controles.addWidget(self.cmb_accion)
+        layout_controles.addWidget(self.lbl_subfiltro)
+        layout_controles.addWidget(self.cmb_subfiltro)
+        layout_controles.addWidget(self.lbl_busqueda)
+        layout_controles.addWidget(self.txt_busqueda)
+        layout_controles.addWidget(self.lbl_agrupacion)
+        layout_controles.addWidget(self.cmb_agrupacion)
+        layout_controles.addStretch()
+        layout_controles.addWidget(self.btn_prev)
+        layout_controles.addWidget(self.btn_next)
+        
+        layout_principal.addWidget(panel_controles)
+        
+        # Lienzo del gráfico
+        self.chart = QChart()
+        self.chart.setAnimationOptions(QChart.SeriesAnimations)
+        self.chart.setBackgroundBrush(QColor(self.COLOR_FONDO_MODO_NEGRO))
+        self.chart.setTitleBrush(QColor(self.COLOR_TEXTO_MODO_NEGRO))
+        
+        self.chart_view = QChartView(self.chart)
+        self.chart_view.setRenderHint(QPainter.Antialiasing)
+        
+        layout_principal.addWidget(self.chart_view)
+
+        # Disparar carga de datos inicial
+        self.cargar_datos()
+
+    def obtener_widget_vista(self):
+        """Retorna el widget principal, sirviendo el requerimiento de MainWindow."""
+        return self.vista
+
+    def cargar_datos(self):
+        """Carga datos iniciales en los ComboBox y regenera los resultados."""
+        self.cmb_accion.blockSignals(True)
+        self.cmb_accion.clear()
+        acciones = self.obtener_acciones_disponibles()
+        for acc in acciones:
+            self.cmb_accion.addItem(acc["nombre"], userData=acc["id"])
+        self.cmb_accion.blockSignals(False)
+        
+        self._al_cambiar_accion()
+
+    def _al_cambiar_accion(self):
+        """Ejecuta los refrescos requeridos para mostrar subfiltros y ajusta la visibilidad."""
+        id_accion = self.cmb_accion.currentData()
+        
+        self.cmb_subfiltro.blockSignals(True)
+        self.cmb_subfiltro.clear()
+        subfiltros = self.obtener_subfiltros_disponibles(id_accion)
+        for sub in subfiltros:
+            self.cmb_subfiltro.addItem(sub["nombre"], userData=sub["id"])
+        self.cmb_subfiltro.blockSignals(False)
+        
+        es_vista_estatica = id_accion in ["autores", "editoriales", "categorias", "generos"]
+        
+        # Si es un Catálogo (vista estática): ocultar agrupación y botones de navegación
+        self.lbl_agrupacion.setVisible(not es_vista_estatica)
+        self.cmb_agrupacion.setVisible(not es_vista_estatica)
+        self.btn_prev.setVisible(not es_vista_estatica)
+        self.btn_next.setVisible(not es_vista_estatica)
+
+        # Si es Auditoría (NO estática): ocultar subfiltro y barra de búsqueda
+        self.lbl_subfiltro.setVisible(es_vista_estatica)
+        self.cmb_subfiltro.setVisible(es_vista_estatica)
+        self.lbl_busqueda.setVisible(es_vista_estatica)
+        self.txt_busqueda.setVisible(es_vista_estatica)
+
+        # Limpiar la barra de búsqueda cada vez que se cambia la vista para evitar filtros residuales
+        self.txt_busqueda.blockSignals(True)
+        self.txt_busqueda.clear()
+        self.txt_busqueda.blockSignals(False)
+        
+        self.offset_periodo = 0
+        self.actualizar_grafico()
+
+    def _retroceder_periodo(self):
+        self.offset_periodo -= 1
+        self.actualizar_grafico()
+
+    def _avanzar_periodo(self):
+        self.offset_periodo += 1
+        self.actualizar_grafico()
+
+    def actualizar_grafico(self):
+        """Solicita los datos mediante la lógica original y traza las coordenadas."""
+        id_accion = self.cmb_accion.currentData()
+        id_subfiltro = self.cmb_subfiltro.currentData()
+        agrupacion = self.cmb_agrupacion.currentText()
+        texto_busqueda = self.txt_busqueda.text()
+        
+        datos = self.obtener_reporte_estadistico(agrupacion, self.offset_periodo, id_accion, id_subfiltro, texto_busqueda)
+        
+        # Limpieza del lienzo
+        self.chart.removeAllSeries()
+        for ax in self.chart.axes():
+            self.chart.removeAxis(ax)
+
+        modo = datos.get("modo_grafico", "agrupado_lado_a_lado")
+        
+        if modo == "apilado":
+            series_chart = QStackedBarSeries()
+        else:
+            series_chart = QBarSeries()
+            
+        for serie_data in datos["series"]:
+            bar_set = QBarSet(serie_data["nombre"])
+            bar_set.append(serie_data["datos"])
+            bar_set.setColor(QColor(serie_data.get("color_barra", "#FFFFFF")))
+            series_chart.append(bar_set)
+            
+        self.chart.addSeries(series_chart)
+        self.chart.setTitle(datos["titulo"])
+        self.chart.setTitleBrush(QColor(datos.get("estilo_base", {}).get("texto", self.COLOR_TEXTO_MODO_NEGRO)))
+        self.chart.setBackgroundBrush(QColor(datos.get("estilo_base", {}).get("fondo", self.COLOR_FONDO_MODO_NEGRO)))
+        
+        # Configurar Eje X
+        axis_x = QBarCategoryAxis()
+        axis_x.append(datos["eje_x"])
+        axis_x.setLabelsBrush(QColor(datos.get("estilo_base", {}).get("texto", self.COLOR_TEXTO_MODO_NEGRO)))
+        self.chart.addAxis(axis_x, Qt.AlignBottom)
+        series_chart.attachAxis(axis_x)
+        
+        # Configurar Eje Y
+        axis_y = QValueAxis()
+        axis_y.setLabelsBrush(QColor(datos.get("estilo_base", {}).get("texto", self.COLOR_TEXTO_MODO_NEGRO)))
+        axis_y.setLabelFormat("%d")
+        self.chart.addAxis(axis_y, Qt.AlignLeft)
+        series_chart.attachAxis(axis_y)
+
+    # =========================================================================
+    # LÓGICA DE DATOS
+    # =========================================================================
 
     def _refrescar_transaccion(self):
         if self.bd:
@@ -58,7 +247,7 @@ class LibroEstadisticas:
         acciones.append({"id": "editoriales", "nombre": "Catálogo: Top Libros por Editorial"})
         acciones.append({"id": "categorias", "nombre": "Catálogo: Libros por Categoría"})
         acciones.append({"id": "generos", "nombre": "Catálogo: Libros por Género"})
-        acciones.append({"id": "estados", "nombre": "Catálogo: Estados Operativos"})
+        # Se ha removido la opción de Estados Operativos según tus especificaciones
         return acciones
 
     def obtener_subfiltros_disponibles(self, id_accion=None):
@@ -102,18 +291,16 @@ class LibroEstadisticas:
         finally:
             cursor.close()
 
-    def obtener_reporte_estadistico(self, agrupacion="Por Semana", offset_periodo=0, id_accion_filtro=None, id_subfiltro=None):
+    def obtener_reporte_estadistico(self, agrupacion="Por Semana", offset_periodo=0, id_accion_filtro=None, id_subfiltro=None, texto_busqueda=""):
         
         if id_accion_filtro == "autores":
-            return self._generar_reporte_parametros("param_autores", "libro_autor", "id_autor", "nombre_completo", "Densidad de Autores", id_subfiltro)
+            return self._generar_reporte_parametros("param_autores", "libro_autor", "id_autor", "nombre_completo", "Densidad de Autores", id_subfiltro, texto_busqueda)
         elif id_accion_filtro == "editoriales":
-            return self._generar_reporte_parametros("editoriales", "libro_editorial", "id_editorial", "nombre_editorial", "Distribución por Editorial", id_subfiltro)
+            return self._generar_reporte_parametros("editoriales", "libro_editorial", "id_editorial", "nombre_editorial", "Distribución por Editorial", id_subfiltro, texto_busqueda)
         elif id_accion_filtro == "categorias":
-            return self._generar_reporte_parametros("categorias_catalogo", "libro_categoria", "id_categoria", "nombre_categoria", "Clasificación por Categorías", id_subfiltro)
+            return self._generar_reporte_parametros("categorias_catalogo", "libro_categoria", "id_categoria", "nombre_categoria", "Clasificación por Categorías", id_subfiltro, texto_busqueda)
         elif id_accion_filtro == "generos":
-            return self._generar_reporte_parametros("generos", "libro_genero", "id_genero", "nombre_genero", "Distribución por Géneros Literarios", id_subfiltro)
-        elif id_accion_filtro == "estados":
-            return self._generar_reporte_estados()
+            return self._generar_reporte_parametros("generos", "libro_genero", "id_genero", "nombre_genero", "Distribución por Géneros Literarios", id_subfiltro, texto_busqueda)
 
         if agrupacion in ["Por Día", "Por Semana"]:
             datos = self.obtener_estadisticas_semanales(offset_periodo, id_accion_filtro)
@@ -133,7 +320,7 @@ class LibroEstadisticas:
         datos["titulo"] = titulo
         return datos
 
-    def _generar_reporte_parametros(self, tabla_param, tabla_puente, col_id, col_nombre, titulo_grafico, id_subfiltro=None):
+    def _generar_reporte_parametros(self, tabla_param, tabla_puente, col_id, col_nombre, titulo_grafico, id_subfiltro=None, texto_busqueda=""):
         self._refrescar_transaccion()
         cursor = self.bd.cursor(dictionary=True)
         series = []
@@ -145,10 +332,15 @@ class LibroEstadisticas:
                     FROM libros l
                     INNER JOIN {tabla_puente} p ON l.id_libro = p.id_libro
                     WHERE p.{col_id} = %s
-                    ORDER BY total DESC, l.titulo ASC
-                    LIMIT 30
                 """
-                cursor.execute(sql, (id_subfiltro,))
+                params = [id_subfiltro]
+                
+                if texto_busqueda:
+                    sql += " AND l.titulo LIKE %s"
+                    params.append(f"%{texto_busqueda}%")
+                    
+                sql += " ORDER BY total DESC, l.titulo ASC LIMIT 30"
+                cursor.execute(sql, tuple(params))
                 filas = cursor.fetchall()
                 
                 color_idx = 0
@@ -171,11 +363,20 @@ class LibroEstadisticas:
                     SELECT p.{col_nombre} as nombre, COUNT(l.id_libro) as total
                     FROM {tabla_param} p
                     LEFT JOIN {tabla_puente} l ON p.{col_id} = l.{col_id}
-                    GROUP BY p.{col_id}, p.{col_nombre}
-                    ORDER BY total DESC, p.{col_nombre} ASC
-                    LIMIT 20
                 """
-                cursor.execute(sql)
+                params = []
+                
+                if texto_busqueda:
+                    sql += f" WHERE p.{col_nombre} LIKE %s"
+                    params.append(f"%{texto_busqueda}%")
+                    
+                sql += f" GROUP BY p.{col_id}, p.{col_nombre} ORDER BY total DESC, p.{col_nombre} ASC LIMIT 20"
+                
+                if params:
+                    cursor.execute(sql, tuple(params))
+                else:
+                    cursor.execute(sql)
+                    
                 filas = cursor.fetchall()
                 
                 color_idx = 0
@@ -201,38 +402,6 @@ class LibroEstadisticas:
             "eje_x": [eje_x_label],
             "series": series,
             "titulo": titulo_final
-        }
-
-    def _generar_reporte_estados(self):
-        self._refrescar_transaccion()
-        cursor = self.bd.cursor(dictionary=True)
-        series = []
-        try:
-            sql = "SELECT estado, COUNT(id_libro) as total FROM libros GROUP BY estado"
-            cursor.execute(sql)
-            filas = cursor.fetchall()
-            
-            color_idx = 0
-            for f in filas:
-                estado_str = str(f['estado']).upper()
-                color = self.COLORES_ESTADOS.get(estado_str, self.COLORES_PARAMETROS[color_idx % len(self.COLORES_PARAMETROS)])
-                series.append({
-                    "id_accion": "estado",
-                    "nombre": f['estado'],
-                    "color_barra": color,
-                    "color_texto": self.COLOR_TEXTO_MODO_NEGRO,
-                    "datos": [f['total']]
-                })
-                color_idx += 1
-        finally:
-            cursor.close()
-
-        return {
-            "modo_grafico": "agrupado_lado_a_lado",
-            "estilo_base": {"fondo": self.COLOR_FONDO_MODO_NEGRO, "texto": self.COLOR_TEXTO_MODO_NEGRO},
-            "eje_x": ["Estados Actuales de Títulos"],
-            "series": series,
-            "titulo": "Metadatos - Estados Operativos del Catálogo"
         }
 
     def obtener_estadisticas_semanales(self, offset_periodo=0, id_accion_filtro=None):
